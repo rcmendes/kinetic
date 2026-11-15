@@ -24,7 +24,7 @@ You stay thin: never read code or full diffs. Read only script JSON, the first l
 3. For each ready id, prepare it (all of this before any dispatch):
    - Ticket file: in local mode the decompose skill already wrote `<run_dir>/issues/<id>.md`. For a quick-lane or `--from build` ticket, write `<run_dir>/issues/<id>.md` yourself from the ref (copy the ticket file if the ref is one; otherwise write the title and acceptance criteria from the ref's text or the issue fetched through the adapter) before dispatch.
    - Worktree: `kinetic gitops worktree --repo <repo's integration worktree> --dest <run_dir>/worktrees/<repo>-<id> --branch kinetic/<run-id>/<id> --base kinetic/<run-id>/integration`, then `set-ticket --id <id> --field branch=kinetic/<run-id>/<id>` and `set-ticket --id <id> --field worktree=<run_dir>/worktrees/<repo>-<id>`. If the worktree already exists (recovery), keep it.
-   - Setup, only for a worktree just created: `kinetic gitops setup --run <run_dir> --repo-name <repo> --path <run_dir>/worktrees/<repo>-<id>`. It runs the repo's `setup` command (skipped when none is configured). On exit 1, do not dispatch: set the ticket `blocked` (`set-ticket --field status=blocked`) and show the user the `log_path` from its JSON. Never continue past a failed setup.
+   - Setup, only for a worktree just created: `kinetic gitops setup --run <run_dir> --repo-name <repo> --path <run_dir>/worktrees/<repo>-<id>`. It runs the repo's `setup` command (skipped when none is configured). On exit 1, do not dispatch: set the ticket `blocked` (`set-ticket --field status=blocked`), show the user the `log_path` from its JSON and ask once: fix the setup command, retry, or proceed without setup. Record the answer with `add-ruling`. Fix: change the command through `kinetic project update --json '{"repos": {...}}'` (the whole `repos` object, every other entry kept as it is), then retry. Retry: re-run `kinetic gitops setup` on the existing worktree; on exit 0 set the ticket back to `todo` (`set-ticket --field status=todo`), on exit 1 ask again. Proceed: set the ticket back to `todo`. The next round dispatches it on the same worktree. Never continue past a failed setup without the user's answer.
    - Mark it running first, so a crash cannot leave a live worktree marked `todo`: `kinetic state set-ticket --run <run_dir> --id <id> --field status=running`.
 4. Start every prepared ticket in parallel, each `implementer` in the background: one dispatch per id, all at once. Each brief is exactly these lines:
 
@@ -35,13 +35,13 @@ Ticket: <id>
 Repo: <ticket worktree>
 Repo name: <repo>
 Ticket ref: <id>
-Tracker adapter: <adapter path from `kinetic tracker resolve`>
+Tracker adapter: <adapter path from `kinetic tracker resolve`, or trackers/local.md, see below>
 Ticket file: <run_dir>/issues/<id>.md   (local mode only)
 Report: <run_dir>/.kinetic/reports/<id>.md
 Grant: <the Grant line from gates.md>
 ```
 
-`Tracker adapter:` is the literal path the `adapter` key of `kinetic tracker resolve` gives. Agents run `kinetic <module>` commands like you do; `kinetic` is on their PATH. `Docs:` holds the glossary and ADR drafts the grill phase wrote (it may not exist).
+`Tracker adapter:` is the literal path the `adapter` key of `kinetic tracker resolve` gives, except in a run whose `rulings` hold `tracker: local for this run`: there it is `<clone>/trackers/local.md` in every brief, and every tracker operation in this guide follows that adapter. Agents run `kinetic <module>` commands like you do; `kinetic` is on their PATH. `Docs:` holds the glossary and ADR drafts the grill phase wrote (it may not exist).
 
 ## Resume or fresh implementer
 

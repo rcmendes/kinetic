@@ -91,7 +91,7 @@ Optional companions that kinetic uses when present and falls back without: the `
 
 ## Quick start
 
-1. `/kinetic:start` and talk the idea through: the goal, the repos or systems involved, the links and files that matter. Once the talk has that shape, kinetic asks once "Turn this into a project?". On yes it proposes a name and a folder (never inside a git repo), creates the project folder (`.kinetic/`, `bare-repos/`, `runs/`), writes the conversation's notes and references into the first run's `docs/`, and continues that run at the grill. Nothing is written before the yes.
+1. `/kinetic:start` and talk the idea through: the goal, the repos or systems involved, the links and files that matter. Once the talk has that shape, kinetic asks once "Turn this into a project?". On yes it proposes a name and a folder (never inside a git repo), creates the project folder (`.kinetic/`, `bare-repos/`, `runs/`), writes the conversation's notes and references into the first run's `docs/`, and tells you to open a new session inside the project and run `/kinetic:run`, which starts that run at the grill. Nothing is written before the yes.
 2. Inside a project, `/kinetic:run "let partners export statements as CSV"` (or a Jira key, or a path to a spec) starts another run. kinetic picks a lane, says why in one line, and lets you override it. The discover phase clones each repo into `bare-repos/` (or creates it on GitHub, after you confirm owner, name and visibility) and asks for its verify and optional setup commands; the decompose phase asks whether the run publishes to a tracker.
 3. Answer the grill questions, approve the spec, approve the ticket breakdown. From there implementers work in the background; you are asked only when one needs a decision.
 4. Approve the ship gate. kinetic pushes the integration branches and opens one draft PR per repo, in merge order.
@@ -348,7 +348,7 @@ To rename any of these for your project, override them in the project config:
 With `tracker: orbit` a run's tickets live on an [Orbit](https://github.com/rcmendes/orbit) Board instead of in `state.json`, so there is one copy and nothing to drift. kinetic still schedules: the frontier, edge types, the parallel cap and fix rounds are unchanged. This works through the **ticket store**, the interface `state.py` reads and writes tickets through; every other tracker uses the local ticket store, exactly as before.
 
 - **What lives where.** Each slice is a Parent Task (`type: epic`) and each ticket a SubTask. Every kinetic field is in the Task's `kinetic` Annotation; Orbit's status, claim, waiting reason and labels are derived from it. A `blocked_by` edge is an Orbit dependency, with its edge type in the Annotation. Every Task of a run carries the label `kinetic-run-<run id>`.
-- **Decompose.** Tickets are staged in `<run_dir>/tickets.staged.json` with local ids, validated, and published in one `orbit batch` when the breakdown gate is approved (`kinetic state publish-tickets` does it on demand). Source Keys make a repeated publish safe.
+- **Decompose.** Tickets are staged in `<run_dir>/.kinetic/tickets.staged.json` with local ids, validated, and published in one `orbit batch` when the breakdown gate is approved (`kinetic state publish-tickets` does it on demand). Source Keys make a repeated publish safe.
 - **Other agents keep out.** Waiting agent tickets carry the hold label `kinetic`; add it to `non_ready_labels` in the Board's `config.toml` (doctor warns until you do). kinetic removes it and claims the Task in one batch when it dispatches the ticket.
 - **People.** A human ticket carries `ready-for-human`; finish it with `orbit done <id>`. An agent ticket marked done outside kinetic becomes `needs_decision`, because it has no passing verify.
 - **Liveness.** kinetic's PostToolUse hooks heartbeat the running ticket's claim at most every 5 minutes; `/kinetic:status` lists a running ticket whose lease lapsed as "implementer may be stuck".
@@ -394,7 +394,7 @@ Ship fills one template for every PR. The default is `templates/pr-body.md`. To 
 |---|---|
 | `/kinetic:run <JIRA-KEY\|idea\|spec-path> [--from build]` | Orchestrates a run end to end, stopping at each gate |
 | `/kinetic:implement <JIRA-KEY\|ticket-file\|spec-path>` | Alias for `run --from build` on an already specified ticket |
-| `/kinetic:start [idea\|ticket-ref]` | Turns a conversation into a project folder on your yes, then starts its first run; inside a project it hands off to `run` |
+| `/kinetic:start [idea\|ticket-ref]` | Turns a conversation into a project folder and its first run's notes on your yes, then sends you to a new session inside it; inside a project it hands off to `run` |
 | `/kinetic:doctor` | Read-only health check with a one-line fix per failure |
 | `/kinetic:status [run-dir]` | Phase, tickets, frontier and gates of a run (the run of the current folder by default) |
 | `/kinetic:ask` | The lanes and the next step `next_step` computes for the run of the current folder |

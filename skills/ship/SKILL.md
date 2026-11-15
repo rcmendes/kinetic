@@ -8,7 +8,7 @@ model: sonnet
 
 Write a PR body per repo integration branch, then open the set as **draft** PRs in merge order, wiring each PR's Depends on and Related PRs. This skill never invokes another skill and never dispatches a subagent: the orchestrator follows it inline.
 
-The orchestrator passes `Run: <dir>` (the run directory, `<project>/runs/<run-id>/`). Run scripts as `kinetic <module> ...`. Repo paths, integration branches and tickets are in the run state (`kinetic state load --run <dir>`, fields `repos` and `tickets`); `base_branch` comes from repo config (default `main`); `tracker` comes from the project config (`kinetic tracker resolve`).
+The orchestrator passes `Run: <dir>` (the run directory, `<project>/runs/<run-id>/`). Run scripts as `kinetic <module> ...`. Repo paths, integration branches and tickets are in the run state (`kinetic state load --run <dir>`, fields `repos` and `tickets`); `base_branch` comes from repo config (default: the clone's `default_branch` from `kinetic bare list`); `tracker` comes from the project config (`kinetic tracker resolve`), except in a run whose `rulings` hold `tracker: local for this run`: then use `trackers/local.md` for every tracker operation and ticket reference.
 
 ## Rules
 

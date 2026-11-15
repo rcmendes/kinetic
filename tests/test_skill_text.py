@@ -29,7 +29,8 @@ SKILLS = {"ask", "bare-clone", "bare-refresh", "catalog-refresh", "catalog-setup
 # Global config and bookkeeping paths the project layout replaced.
 STALE = ("~/.config/kinetic/repos.json", "repos.json", "workspace_root", "active-run", "bare_dir",
          "kinetic bare show", "kinetic bare set", "kinetic bare detect", "/kinetic:bare-setup",
-         "/kinetic:init", "<run_dir>/reports", "<run_dir>/logs", "<run_dir>/state.json")
+         "/kinetic:init", "<run_dir>/reports", "<run_dir>/logs", "<run_dir>/state.json",
+         "<run_dir>/tickets.staged")
 
 # Spec model tiers: implementer and fix-reviewer are standard; the reviewers and
 # implementer-strong are strong. model: stays as the Claude/Devin default
@@ -192,14 +193,20 @@ class SkillTextTest(unittest.TestCase):
         self.assertLess(text.index('"Turn this into a project?"'),
                         text.index("kinetic project create"))
         self.assertNotIn("disable-model-invocation", _frontmatter(p))
-        for needle in ("kinetic project find", "skills/run/SKILL.md", "docs/notes.md", "docs/refs/"):
+        for needle in ("kinetic project find", "docs/notes.md", "docs/refs/",
+                       "open a new session inside `<project>`", "cd <project> && kinetic"):
             self.assertIn(needle, text)
+        # After creating the project start never runs the run skill in this session.
+        after = text[text.index("kinetic project create"):]
+        self.assertNotIn("skills/run/SKILL.md", after)
+        self.assertNotIn("kinetic project use-run", text)
 
     def test_run_binds_and_recovers_through_the_project(self):
         text = (ROOT / "skills" / "run" / "SKILL.md").read_text()
         for needle in ("kinetic project find", "/kinetic:start", "kinetic project run-dir --id",
                        "kinetic project use-run --run <run_dir>", "kinetic project current-run",
-                       "kinetic project runs"):
+                       "kinetic project runs", "docs/notes.md` but no `.kinetic/state.json`",
+                       "tracker: local for this run"):
             self.assertIn(needle, text)
         self.assertIn("kinetic project use-run --run <run_dir>",
                       (ROOT / "skills" / "run" / "guides" / "recovery.md").read_text())
@@ -207,7 +214,8 @@ class SkillTextTest(unittest.TestCase):
     def test_build_loop_setup_scopes_and_report_paths(self):
         loop = (ROOT / "skills" / "run" / "guides" / "build-loop.md").read_text()
         for needle in ("kinetic gitops setup", "--scope full", "<run_dir>/needs-human/<id>-<N>.md",
-                       "<run_dir>/.kinetic/reports/<id>.md"):
+                       "<run_dir>/.kinetic/reports/<id>.md", "proceed without setup",
+                       "trackers/local.md"):
             self.assertIn(needle, loop)
         for agent in ("implementer", "implementer-strong"):
             self.assertIn("--scope ticket", (ROOT / "agents" / f"{agent}.md").read_text())
