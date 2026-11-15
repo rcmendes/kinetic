@@ -28,7 +28,7 @@ SKILLS = {"ask", "bare-clone", "bare-refresh", "catalog-refresh", "catalog-setup
 
 # The phase skills that stop and point to kinetic next_step when no Run: is passed.
 PHASE_SKILLS = ("grill", "discover", "specify", "decompose", "ship", "retro")
-GUARD_LINE = ("No `Run:` was passed by the orchestrator: run `kinetic next_step`, tell the user "
+GUARD_LINE = ("If the orchestrator passed no `Run:`, run `kinetic next_step`, tell the user "
               "its `command` and `reason` in one line, and stop.")
 
 # Global config and bookkeeping paths the project layout replaced.

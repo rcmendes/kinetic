@@ -8,7 +8,7 @@ model: sonnet
 
 Find the repos this run touches, get the user to confirm them, and make each one usable: a bare clone in `<project>/bare-repos/`, registered in the project config (`<project>/.kinetic/config.json`), with its integration worktree under the run directory. `<project>` is what `kinetic project find` prints. This skill never invokes another skill.
 
-No `Run:` was passed by the orchestrator: run `kinetic next_step`, tell the user its `command` and `reason` in one line, and stop.
+If the orchestrator passed no `Run:`, run `kinetic next_step`, tell the user its `command` and `reason` in one line, and stop.
 
 The orchestrator passes:
 

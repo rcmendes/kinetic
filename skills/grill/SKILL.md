@@ -8,7 +8,7 @@ model: sonnet
 
 Interview the user relentlessly until you reach a shared understanding, and write the domain language and key decisions down as they crystallise.
 
-No `Run:` was passed by the orchestrator: run `kinetic next_step`, tell the user its `command` and `reason` in one line, and stop.
+If the orchestrator passed no `Run:`, run `kinetic next_step`, tell the user its `command` and `reason` in one line, and stop.
 
 The orchestrator passes `Run: <dir>` (the run directory, `<project>/runs/<run-id>/`) and the ref being grilled. Run scripts as `kinetic <module> ...`. This skill never invokes another skill.
 

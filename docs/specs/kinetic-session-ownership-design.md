@@ -109,7 +109,7 @@ The mark lasts for the session. After `start` creates a project, this session ke
 
 Each phase skill (`grill`, `discover`, `specify`, `decompose`, `ship`, `retro`) starts with the same line:
 
-> No `Run:` was passed by the orchestrator: run `kinetic next_step`, tell the user its `command` and `reason` in one line, and stop.
+> If the orchestrator passed no `Run:`, run `kinetic next_step`, tell the user its `command` and `reason` in one line, and stop.
 
 ### 5. The run id is the user's choice
 

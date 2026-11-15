@@ -169,7 +169,7 @@ git commit -m "kinetic-session-ownership: skill guard hook and the skill-ownersh
 - Consumes: `kinetic project start-session`, `kinetic project run-dir --id` with `exists` (Task 1), `kinetic project instructions` (Task 1), the `skill-ownership` guarantee (Task 3).
 - Produces:
   - `next_step._active()`: outside every project it returns `{"command": "/kinetic:start", "reason": "no kinetic project here"}`. Inside a project the behaviour is unchanged.
-  - Each of `grill`, `discover`, `specify`, `decompose`, `ship`, `retro` starts its body, right after the title paragraph, with this line, verbatim: ``No `Run:` was passed by the orchestrator: run `kinetic next_step`, tell the user its `command` and `reason` in one line, and stop.``
+  - Each of `grill`, `discover`, `specify`, `decompose`, `ship`, `retro` starts its body, right after the title paragraph, with this line, verbatim: ``If the orchestrator passed no `Run:`, run `kinetic next_step`, tell the user its `command` and `reason` in one line, and stop.``
   - `start`: a new first step, before the project check, runs `kinetic project start-session` and explains in one sentence that it marks this conversation as kinetic's. Step "First run" asks the run-id question before computing the run dir.
   - `run`: preflight asks the run-id question only when it creates a new run from an idea or a spec path; a ticket reference is the id without asking; an existing run is resumed.
   - The run-id question, in both skills, with the harness's question tool when the profile names one, else in chat: the recommended id first (marked recommended), then a typed id. A typed id is checked with `kinetic project run-dir --id <id>`: exit 1, or `"exists": true`, asks again with the reason.
