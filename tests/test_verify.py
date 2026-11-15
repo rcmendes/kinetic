@@ -39,7 +39,7 @@ class VerifyTest(unittest.TestCase):
         self._verify_cmd("echo out; echo err 1>&2")
         res = verify.run(self.run_dir, None, "svc", self.repo, self.central)
         log = Path(res["log_path"])
-        self.assertEqual(log.parent, self.run_dir / "logs")
+        self.assertEqual(log.parent, self.run_dir / ".kinetic" / "logs")
         self.assertTrue(log.name.startswith("verify-svc-"))
         self.assertIn("out", log.read_text())
         self.assertIn("err", log.read_text())
@@ -72,7 +72,7 @@ class VerifyTest(unittest.TestCase):
         project.update(self.project, {"repos": {"svc": {"verify": "true"}}})
         with self.assertRaises(OSError):
             verify.run(self.run_dir, None, "svc", gone, self.central)
-        self.assertFalse((self.run_dir / "logs").exists())
+        self.assertFalse((self.run_dir / ".kinetic" / "logs").exists())
 
     def _main(self, *args):
         out, err = io.StringIO(), io.StringIO()

@@ -16,7 +16,7 @@ def run(run_dir, ticket_id, repo_name: str, repo_path, project_config: Path) -> 
     cfg = config.resolve(repo_name, repo_path, Path(project_config))
     if not repo_path.is_dir():
         raise OSError(f"repo path is not a directory: {repo_path}")
-    logs = Path(run_dir) / "logs"
+    logs = state.internal(run_dir) / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     started = datetime.now(timezone.utc)
     ts = started.strftime("%Y%m%dT%H%M%S%fZ")

@@ -4,7 +4,7 @@ The only module in kinetic that knows Orbit. Tickets are SubTasks of their
 slice's Parent Task; every kinetic field lives in the Task's `kinetic`
 Annotation, which is authoritative, and the Orbit status, claim, waiting
 reason and labels are derived from it and written in the same `orbit batch`.
-Tickets not yet published are staged in <run_dir>/tickets.staged.json.
+Tickets not yet published are staged in <run_dir>/.kinetic/tickets.staged.json.
 """
 from __future__ import annotations
 
@@ -232,7 +232,8 @@ class OrbitTicketStore:
 
     # -- staged tickets --
     def stage_path(self, run_dir) -> Path:
-        return Path(run_dir) / STAGED
+        from kinetic.state import internal
+        return internal(run_dir) / STAGED
 
     def _staged(self, run_dir) -> dict:
         p = self.stage_path(run_dir)

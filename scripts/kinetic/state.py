@@ -27,8 +27,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
+def internal(run_dir) -> Path:
+    """The run's bookkeeping folder: state.json, state.lock, reports/, logs/, touch/."""
+    return Path(run_dir) / ".kinetic"
+
+
 def _file(run_dir) -> Path:
-    return Path(run_dir) / "state.json"
+    return internal(run_dir) / "state.json"
 
 
 # phase names before 0.4.0; runs recorded in them read as the new names
@@ -79,8 +84,8 @@ def save(run_dir, state: dict) -> None:
 def _mutate(run_dir, fn, tickets: bool = True) -> dict:
     """Exclusive-locked load -> fn(state) -> save; returns the saved state.
     tickets=False changes run-level fields only, without reading the ticket store."""
-    Path(run_dir).mkdir(parents=True, exist_ok=True)
-    with open(Path(run_dir) / "state.lock", "a") as lock:
+    internal(run_dir).mkdir(parents=True, exist_ok=True)
+    with open(internal(run_dir) / "state.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = load(run_dir, tickets=tickets)
         before = copy.deepcopy(state.get("tickets", {}))
@@ -112,19 +117,33 @@ def init(run_dir, lane: str, ref: str, force: bool = False,
          ticket_store_record: dict | None = None) -> dict:
     if lane not in LANES:
         raise ValueError(f"invalid lane '{lane}': expected one of {LANES}")
-    Path(run_dir).mkdir(parents=True, exist_ok=True)
+    internal(run_dir).mkdir(parents=True, exist_ok=True)
     state = {
         "run_id": uuid.uuid4().hex[:12], "run_dir": str(run_dir), "lane": lane,
         "ref": ref, "phase": "intake", "tickets": {}, "slices": [], "repos": {},
         "gates": {}, "rulings": [], "verify": {}, "last_edit_at": None,
         "ticket_store": ticket_store_record or dict(ticket_store.LOCAL),
     }
-    with open(Path(run_dir) / "state.lock", "a") as lock:
+    with open(internal(run_dir) / "state.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if _file(run_dir).exists() and not force:
             raise FileExistsError(f"state already exists in {run_dir}; use force to overwrite")
         save(run_dir, state)
     return state
+
+
+def set_ticket_store(run_dir, record: dict) -> dict:
+    """Pick the run's ticket store; refused once the run has tickets, which would be stranded."""
+    if not isinstance(record, dict):
+        raise ValueError("ticket store record must be a JSON object")
+    with open(internal(run_dir) / "state.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        st = load(run_dir)
+        if st.get("tickets"):
+            raise ValueError("the run already has tickets; its ticket store cannot change")
+        st["ticket_store"] = record
+        save(run_dir, st)
+        return st
 
 
 OCCUPIED = ("running", "needs_decision", "blocked")
@@ -421,7 +440,7 @@ def record_gate(run_dir, gate: str, approved: bool, note: str = "") -> None:
 def publish_tickets(run_dir) -> dict:
     """Publish staged tickets through the run's ticket store; returns provisional -> final id.
     A no-op for the local ticket store."""
-    with open(Path(run_dir) / "state.lock", "a") as lock:
+    with open(internal(run_dir) / "state.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = load(run_dir)
         mapping = ticket_store.for_state(state).publish(run_dir, state)
@@ -495,6 +514,7 @@ def main(argv=None) -> int:
     cmd("add-ruling", ("--what", {"required": True}), ("--why", {"required": True}),
         ("--cost", {"required": True}))
     cmd("stale-running")
+    cmd("set-ticket-store", ("--record", {"required": True, "metavar": "JSON"}))
 
     a = p.parse_args(argv)
     try:
@@ -532,8 +552,10 @@ def main(argv=None) -> int:
         elif a.cmd == "add-ruling":
             add_ruling(a.run, a.what, a.why, a.cost)
             out = load(a.run)["rulings"]
+        elif a.cmd == "set-ticket-store":
+            out = set_ticket_store(a.run, json.loads(a.record))
         else:
-            out = stale_running(load(a.run), Path(a.run) / "reports")
+            out = stale_running(load(a.run), internal(a.run) / "reports")
     except (ValueError, OSError, KeyError, FileExistsError) as e:
         print(str(e), file=sys.stderr)
         return 1

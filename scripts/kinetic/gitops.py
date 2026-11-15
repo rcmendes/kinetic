@@ -141,7 +141,7 @@ def pin(run_dir, upstream_repo: str, downstream_repo: str, project_config: Path)
     ref = head.stdout.strip()
     if head.returncode != 0 or not ref:
         raise RuntimeError(head.stderr.strip() or f"cannot resolve HEAD in {up_path}")
-    logs = Path(run_dir) / "logs"
+    logs = state.internal(run_dir) / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     log_path = logs / f"pin-{upstream_repo}-{downstream_repo}-{ts}.log"
