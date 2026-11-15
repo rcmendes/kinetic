@@ -43,14 +43,14 @@ Requirements: macOS or Linux, Python 3.9+, `git`, and `gh` authenticated to GitH
 Clone the repo first (every harness installs from a checkout, because `kinetic install` links the CLI and generates harness files from it):
 
 ```
-git clone git@github.com:apoema-ai/kinetic.git ~/code/kinetic
+git clone git@github.com:rcmendes/kinetic.git ~/code/kinetic
 ```
 
 Then install for your harness. Claude Code, via the repo's plugin marketplace (`.claude-plugin/marketplace.json`):
 
 ```
 ~/code/kinetic/bin/kinetic install --harness claude
-claude plugin marketplace add apoema-ai/kinetic
+claude plugin marketplace add rcmendes/kinetic
 claude plugin install kinetic@kinetic
 ```
 
