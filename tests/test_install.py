@@ -186,7 +186,10 @@ class InstallDevinTest(InstallCase):
 
     def setUp(self):
         super().setUp()
-        self.base_path = os.environ.get("PATH", "")
+        # PATH without any real `devin`, so "without CLI" tests hold on machines that have it
+        self.base_path = os.pathsep.join(
+            d for d in os.environ.get("PATH", "").split(os.pathsep)
+            if not os.access(os.path.join(d, "devin"), os.X_OK))
         self.bin = self.tmp / "devin-bin"
         self.bin.mkdir()
         self.devin_log = self.tmp / "devin.log"
