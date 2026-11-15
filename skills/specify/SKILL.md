@@ -8,6 +8,8 @@ model: sonnet
 
 Take the current conversation context and codebase understanding and produce a spec. Do NOT interview the user; synthesize what you already know. This skill never invokes another skill.
 
+If the orchestrator passed no `Run:`, run `kinetic next_step`, tell the user its `command` and `reason` in one line, and stop.
+
 The orchestrator passes `Run: <dir>` (the run directory, `<project>/runs/<run-id>/`). Run scripts as `kinetic <module> ...`.
 
 Resolve the tracker with `kinetic tracker resolve` (the project's tracker; with none configured it resolves to local), read the adapter file it names, and follow its operations.

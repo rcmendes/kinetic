@@ -38,6 +38,10 @@ _Avoid_: Job, session, task, workflow
 The record, kept in the project, that one harness session works on one run. Hooks use it when the session is not inside the run's folder.
 _Avoid_: Active-run pointer, current run, lock
 
+**Start mark**:
+The record, kept on the machine, that a session was opened with the start skill; it keeps the conversation with kinetic before any project exists.
+_Avoid_: Chat mode, session flag
+
 ## Trackers
 
 **Tracker adapter**:

@@ -32,15 +32,19 @@ def suggest(st: dict | None) -> dict:
             return _r("/kinetic:run", "review and ship")
     if st["phase"] == "ship" and st["gates"].get("ship", {}).get("approved"):
         return _r("/kinetic:run", "retro")
-    return _r("/kinetic:status", "check the board")
+    if st["phase"] == "done":
+        return _r("/kinetic:status", "check the board")
+    return _r("/kinetic:run", f"resume at {st['phase']}")
 
 
 def _active() -> dict:
-    """The suggestion for the run of the cwd, else the project's only open run."""
+    """The suggestion for the run of the cwd, else the project's only open run; outside a project, start."""
+    proj = project.find()
+    if proj is None:
+        return _r("/kinetic:start", "no kinetic project here")
     run = project.run_for_path(os.getcwd())
     if run is None:
-        proj = project.find()
-        runs = project.open_runs(proj) if proj else []
+        runs = project.open_runs(proj)
         if len(runs) > 1:
             return _r("/kinetic:run", f"{len(runs)} open runs; open one from its folder")
         run = runs[0]["run_dir"] if runs else None

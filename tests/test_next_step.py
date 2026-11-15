@@ -64,9 +64,14 @@ class SuggestTest(unittest.TestCase):
         self.assertEqual(r["command"], "/kinetic:run")
         self.assertIn("retro", r["reason"])
 
-    def test_r7_fallback_status(self):
-        r = next_step.suggest(self.S({"A": t("r1", "done")}, phase="spec"))
-        self.assertEqual(r["command"], "/kinetic:status")
+    def test_r7_open_run_resumes_at_its_phase(self):
+        for phase in ("intake", "grill", "discover", "specify", "decompose", "review", "build", "ship"):
+            r = next_step.suggest(self.S({"A": t("r1", "blocked")}, phase=phase))
+            self.assertEqual(r, {"command": "/kinetic:run", "reason": f"resume at {phase}"}, phase)
+
+    def test_r8_done_run_checks_the_board(self):
+        r = next_step.suggest(self.S({"A": t("r1", "done")}, phase="done"))
+        self.assertEqual(r, {"command": "/kinetic:status", "reason": "check the board"})
 
     def test_rule_order_earlier_wins(self):
         # needs_decision (R2) and stale running (R3) both match
@@ -97,22 +102,25 @@ class CliTest(unittest.TestCase):
     def test_cli_run_flag(self):
         run = project.run_dir(self.proj, "r1")
         state.init(run, "quick", "X-1")
-        self.assertEqual(self.out(["--run", str(run)], self.base)["command"], "/kinetic:status")
+        self.assertEqual(self.out(["--run", str(run)], self.base)["command"], "/kinetic:run")
 
-    def test_no_run_outside_project_or_in_empty_project(self):
-        self.assertEqual(self.out([], self.base)["command"], "/kinetic:run <ref>")
+    def test_no_run_in_empty_project(self):
         self.assertEqual(self.out([], self.proj)["command"], "/kinetic:run <ref>")
+
+    def test_next_step_outside_project_points_to_start(self):
+        self.assertEqual(self.out([], self.base),
+                         {"command": "/kinetic:start", "reason": "no kinetic project here"})
 
     def test_run_from_cwd(self):
         run = project.run_dir(self.proj, "r1")
         state.init(run, "quick", "X-1")
         state.init(project.run_dir(self.proj, "r2"), "quick", "X-2")
         (run / "worktrees" / "api").mkdir(parents=True)
-        self.assertEqual(self.out([], run / "worktrees" / "api")["command"], "/kinetic:status")
+        self.assertEqual(self.out([], run / "worktrees" / "api")["command"], "/kinetic:run")
 
     def test_one_open_run_from_project_root(self):
         state.init(project.run_dir(self.proj, "r1"), "quick", "X-1")
-        self.assertEqual(self.out([], self.proj)["command"], "/kinetic:status")
+        self.assertEqual(self.out([], self.proj)["command"], "/kinetic:run")
 
     def test_next_step_two_open_runs(self):
         state.init(project.run_dir(self.proj, "r1"), "quick", "X-1")

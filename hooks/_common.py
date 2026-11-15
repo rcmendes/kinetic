@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -207,6 +208,11 @@ def _norm_opencode(inp: dict) -> dict:
     if out.get("tool_name") in ("shell", "bash"):
         # v2 renamed bash -> shell; accept both spellings
         out["tool_name"] = "Bash"
+    if name == "skill":
+        # the skill tool carries the skill name in input.id; skill_guard reads tool_input.skill
+        if isinstance(ti.get("id"), str) and not ti.get("skill"):
+            ti["skill"] = ti["id"]
+        out["tool_name"] = "Skill"
     if name == "patch":
         # same *** Begin Patch grammar as Codex apply_patch; file_paths is set
         # even when empty so fail-closed hooks can tell "no paths parsed"
@@ -243,6 +249,53 @@ def session_file(proj, sid):
     if not sid or sid in (".", "..") or "/" in sid or os.sep in sid or "\0" in sid:
         return None
     return Path(proj) / ".kinetic" / "sessions" / sid
+
+
+MARK_DAYS = 7
+
+
+def mark_file(sid):
+    """~/.config/kinetic/sessions/<sid>, the start mark of a session; None for an unusable sid."""
+    if session_file(".", sid) is None:
+        return None
+    return Path.home() / ".config" / "kinetic" / "sessions" / str(sid)
+
+
+def has_mark(inp: dict) -> bool:
+    f = mark_file(inp.get("session_id"))
+    return bool(f and f.is_file())
+
+
+def sweep_sessions(proj=None) -> None:
+    """Delete start marks older than MARK_DAYS and, given a project, the run bindings whose run is
+    gone or done. Touches only regular files in those two folders, never a symlinked folder, an
+    empty binding or one written under 60 seconds ago; never raises."""
+    try:
+        cutoff = time.time() - MARK_DAYS * 86400
+        marks = Path.home() / ".config" / "kinetic" / "sessions"
+        for f in marks.iterdir() if marks.is_dir() and not marks.is_symlink() else []:
+            try:
+                if f.is_file() and not f.is_symlink() and f.stat().st_mtime < cutoff:
+                    f.unlink()
+            except OSError:
+                pass
+        if proj is None or project is None:
+            return
+        open_dirs = {os.path.realpath(r["run_dir"]) for r in project.open_runs(proj)}
+        bindings = Path(proj) / ".kinetic" / "sessions"
+        if bindings.is_symlink():
+            return
+        for f in bindings.iterdir() if bindings.is_dir() else []:
+            try:
+                if not f.is_file() or f.is_symlink() or time.time() - f.stat().st_mtime < 60:
+                    continue  # a fresh file may be another session's atomic_write in flight
+                bound = f.read_text().strip()
+                if bound and os.path.realpath(bound) not in open_dirs:
+                    f.unlink()
+            except (OSError, ValueError):
+                pass
+    except Exception:
+        pass
 
 
 def _launch_dir(inp: dict):

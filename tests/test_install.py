@@ -795,7 +795,7 @@ class InstallOpenCodeTest(InstallCase):
         for needle in ("--harness", "opencode", "execute.before",
                        "execute.after", "experimental.idle",
                        "permission", "completion_gate", "record_edit",
-                       "isolation", "orient"):
+                       "isolation", "orient", "skill_guard.py", "SKILL_TOOLS"):
             self.assertIn(needle, text)
 
         m = json.loads(self.manifest_path.read_text())
@@ -946,6 +946,14 @@ class HookCommandPathsTest(unittest.TestCase):
             for c in cmds:
                 script = shlex.split(c)[1]
                 self.assertTrue(Path(script).is_file(), script)
+
+    def test_devin_and_codex_hooks_have_no_skill_guard(self):
+        from kinetic import install
+        for spec in (install._devin_hook_spec(), install._codex_hook_spec()):
+            self.assertEqual(len(spec), 7)
+            self.assertNotIn("skill_guard.py", [s for _, _, s in spec])
+        self.assertIn(("PreToolUse", "^Skill$", "skill_guard.py"),
+                      install._hook_spec("^Write$", "Bash", "Skill"))
 
     def test_clone_path_with_metacharacters_is_quoted(self):
         from kinetic import install

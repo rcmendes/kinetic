@@ -8,6 +8,8 @@ model: sonnet
 
 Conduct a **retrospective** on the run. You are suggesting improvements to the coding agent's **environment** to improve future runs, and drafting the operational docs the run owes. This skill never invokes another skill.
 
+If the orchestrator passed no `Run:`, run `kinetic next_step`, tell the user its `command` and `reason` in one line, and stop.
+
 The orchestrator passes `Run: <dir>` (the run directory, `<project>/runs/<run-id>/`). Run scripts as `kinetic <module> ...`.
 
 ## Writing style for steering files

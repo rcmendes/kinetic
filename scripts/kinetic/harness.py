@@ -20,6 +20,7 @@ GUARANTEES = (
     "write-op-confirmation",  # confirm git push/merge/pr writes and tracker writes
     "deploy-confirmation",    # confirm deploy triggers
     "review-read-only",       # assert-unchanged discards a review that touched the worktree
+    "skill-ownership",        # pre-tool refusal of other plugins' process skills
 )
 
 # The only model tiers agents may declare; each harness maps them to a concrete
@@ -43,6 +44,7 @@ _PROFILES = {
             "shell": "Bash",
             "edit": ["Write", "Edit", "MultiEdit", "NotebookEdit"],
             "patch": None,
+            "skill": "Skill",
         },
         "resume_subagent": True,       # SendMessage to a running agent
         "model_per_dispatch": True,    # Agent tool model: parameter
@@ -78,6 +80,7 @@ _PROFILES = {
             # Devin's apply_patch payload resembles Codex's; the devin
             # normalizer extracts its patch-header paths like Codex's
             "patch": "apply_patch",
+            "skill": None,
         },
         "resume_subagent": False,      # run_subagent/read_subagent, no resume
         "model_per_dispatch": False,   # run_subagent takes a profile, not a model
@@ -93,7 +96,8 @@ _PROFILES = {
             "standard": {"model": "sonnet"},
             "strong": {"model": "opus"},
         },
-        "enforced": list(GUARANTEES),
+        # no skill hook is registered here: skill-ownership stays Instructed
+        "enforced": [g for g in GUARANTEES if g != "skill-ownership"],
     },
     "codex": {
         "id": "codex",
@@ -109,6 +113,7 @@ _PROFILES = {
             "shell": "Bash",
             "edit": ["apply_patch"],
             "patch": "apply_patch",
+            "skill": None,
         },
         "resume_subagent": True,       # resume_agent / followup_task
         "model_per_dispatch": True,    # spawn_agent model parameter
@@ -126,7 +131,8 @@ _PROFILES = {
             "standard": {"model": "gpt-6.1-sol", "effort": "medium"},
             "strong": {"model": "gpt-6-astra", "effort": "high"},
         },
-        "enforced": list(GUARANTEES),
+        # no skill hook is registered here: skill-ownership stays Instructed
+        "enforced": [g for g in GUARANTEES if g != "skill-ownership"],
     },
     "opencode": {
         "id": "opencode",
@@ -144,6 +150,8 @@ _PROFILES = {
             "shell": "shell",
             "edit": ["edit", "write"],
             "patch": "patch",
+            # probed on OpenCode 2.2.5: tool.execute.before sees tool "skill" with the name in input.id
+            "skill": "skill",
         },
         "resume_subagent": True,      # task tool task_id resumes the child session
         "model_per_dispatch": True,   # task tool model param (v2 model_override permission)
@@ -281,7 +289,7 @@ def render(p: dict) -> str:
         f"Harness: {p['name']} ({p['id']})",
         f"Hooks: pre-tool={_yes(h['pre_tool_use'])} post-tool={_yes(h['post_tool_use'])} "
         f"session-start={_yes(h['session_start'])} stop={h['stop']} trust={h['trust']}",
-        f"Tools: shell={t['shell']} edit={_join_or_none(t['edit'])} patch={t['patch'] or 'none'}",
+        f"Tools: shell={t['shell']} edit={_join_or_none(t['edit'])} patch={t['patch'] or 'none'} skill={t['skill'] or 'none'}",
         f"Resume sub-agent: {_yes(p['resume_subagent'])}",
         f"Model per dispatch: {_yes(p['model_per_dispatch'])}",
         f"Question tool: {p['question_tool'] or 'none'}",

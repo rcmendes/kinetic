@@ -169,6 +169,15 @@ class DoctorTest(unittest.TestCase):
         self.central.write_text("{}")
         self.assertEqual(self._by_name()["project-config"]["status"], "pass")
 
+    def test_doctor_project_instructions_warn_and_pass(self):
+        self.assertEqual(self._by_name()["project-instructions"]["status"], "pass")
+        (self.project / "CLAUDE.md").unlink()
+        c = self._by_name()["project-instructions"]
+        self.assertEqual(c["status"], "warn")
+        self.assertIn("CLAUDE.md", c["fix"])
+        self.assertIn("kinetic project instructions", c["fix"])
+        self.assertNotIn("AGENTS.md", c["fix"])
+
     def test_cli_checks_project_repos_when_no_repo_flag(self):
         self._write_project(repos={"svc": {"path": str(self.repo)}, "gone": {"path": str(self.tmp / "nope")}})
         out = io.StringIO()
@@ -184,7 +193,7 @@ class DoctorTest(unittest.TestCase):
         res = doctor.checks([("svc", str(self.repo))], self.home, None, settings=self.settings)
         names = {c["name"] for c in res}
         self.assertTrue({"git", "gh", "harness"} <= names)
-        self.assertFalse({n for n in names if n.startswith(("verify:", "tracker", "project-config", "pr-template"))})
+        self.assertFalse({n for n in names if n.startswith(("verify:", "tracker", "project-config", "project-instructions", "pr-template"))})
         out = io.StringIO()
         with mock.patch.object(doctor.harness, "DEFAULT_SETTINGS", self.settings), \
                 mock.patch.object(doctor.Path, "home", return_value=self.home), \

@@ -39,6 +39,7 @@ const PENDING_ASK_LIMIT = 200
 // minus the mcp__ prefix.
 const EDIT_TOOLS = new Set(["edit", "write", "patch"])
 const SHELL_TOOLS = new Set(["shell", "bash"]) // "bash" is the v1 name
+const SKILL_TOOLS = new Set(["skill"]) // probed on OpenCode 2.2.5: input.id names the skill
 const WRITE_OPS_MCP =
   /atlassian.*(create|edit|update|transition|comment|executewrite|executedestructive)|github.*(create_pull_request|merge_pull_request|update_pull_request|push_files|create_or_update_file|create_branch|delete_file)/i
 const DEPLOY_MCP = /deploy|tekton.*trigger/
@@ -50,6 +51,7 @@ function scriptsFor(tool: unknown, phase: "pre" | "post"): string[] {
   const isShell = SHELL_TOOLS.has(t)
   if (phase === "pre") {
     if (isEdit) out.push("isolation.py")
+    if (SKILL_TOOLS.has(t)) out.push("skill_guard.py")
     if (isShell || WRITE_OPS_MCP.test(t)) out.push("confirm_write_ops.py")
     if (DEPLOY_MCP.test(t)) out.push("confirm_deploy.py")
   } else {

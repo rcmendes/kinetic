@@ -73,7 +73,100 @@ class ProjectTest(unittest.TestCase):
             self.assertEqual(p.returncode, 1, bad)
         p = subprocess.run([sys.executable, "-m", "kinetic", "project", "run-dir", "--id", "r1"],
                            cwd=self.proj, capture_output=True, text=True, env=env)
-        self.assertEqual(json.loads(p.stdout), {"run_dir": str(self.real / "runs" / "r1")})
+        self.assertEqual(json.loads(p.stdout), {"run_dir": str(self.real / "runs" / "r1"),
+                                                "exists": False, "phase": None})
+
+    def test_cli_run_dir_reports_phase(self):
+        for rid, phase in (("open", "grill"), ("finished", "done")):
+            (self.proj / "runs" / rid / ".kinetic").mkdir(parents=True)
+            (self.proj / "runs" / rid / ".kinetic" / "state.json").write_text(json.dumps({"phase": phase}))
+        (self.proj / "runs" / "nostate").mkdir()
+        got = {r: json.loads(self._cli(self.proj, "run-dir", "--id", r).stdout)["phase"]
+               for r in ("open", "finished", "nostate", "missing")}
+        self.assertEqual(got, {"open": "grill", "finished": "done", "nostate": None, "missing": None})
+
+    def test_create_writes_instruction_files(self):
+        for n in project.INSTRUCTION_FILES:
+            t = (self.proj / n).read_text()
+            self.assertEqual(t, f"{project.INSTRUCTIONS_BEGIN}\n{project.INSTRUCTIONS_TEXT}\n{project.INSTRUCTIONS_END}\n")
+
+    def test_instructions_keeps_user_text_and_is_idempotent(self):
+        old = f"before\n\n{project.INSTRUCTIONS_BEGIN}\nold\n{project.INSTRUCTIONS_END}\n\nafter\n"
+        for n in project.INSTRUCTION_FILES:
+            (self.proj / n).write_text(old)
+        project.write_instructions(self.proj)
+        out = project.write_instructions(self.proj)
+        self.assertEqual(out, [str(self.proj / n) for n in project.INSTRUCTION_FILES])
+        for n in project.INSTRUCTION_FILES:
+            t = (self.proj / n).read_text()
+            self.assertTrue(t.startswith("before\n\n") and t.endswith("\n\nafter\n"))
+            self.assertNotIn("\nold\n", t)
+            self.assertEqual(t.count(project.INSTRUCTIONS_BEGIN), 1)
+            self.assertIn(project.INSTRUCTIONS_TEXT, t)
+
+    def test_instructions_appends_when_no_block(self):
+        (self.proj / "AGENTS.md").write_text("mine\n")
+        project.write_instructions(self.proj)
+        t = (self.proj / "AGENTS.md").read_text()
+        self.assertTrue(t.startswith("mine\n\n" + project.INSTRUCTIONS_BEGIN))
+        self.assertTrue(t.endswith(project.INSTRUCTIONS_END + "\n"))
+
+    def test_instructions_keeps_text_after_a_dangling_begin(self):
+        block = f"{project.INSTRUCTIONS_BEGIN}\nold\n{project.INSTRUCTIONS_END}"
+        (self.proj / "AGENTS.md").write_text(f"a\n{project.INSTRUCTIONS_BEGIN}\nmine\n\n{block}\n")
+        project.write_instructions(self.proj)
+        t = (self.proj / "AGENTS.md").read_text()
+        self.assertTrue(t.startswith(f"a\n{project.INSTRUCTIONS_BEGIN}\nmine\n\n{project.INSTRUCTIONS_BEGIN}\n"), t)
+        self.assertNotIn("\nold\n", t)
+
+    def test_instructions_write_through_a_symlink_once(self):
+        (self.proj / "AGENTS.md").write_text("mine\n")
+        (self.proj / "CLAUDE.md").unlink(missing_ok=True)
+        (self.proj / "CLAUDE.md").symlink_to("AGENTS.md")
+        project.write_instructions(self.proj)
+        self.assertTrue((self.proj / "CLAUDE.md").is_symlink())
+        t = (self.proj / "AGENTS.md").read_text()
+        self.assertTrue(t.startswith("mine\n\n"))
+        self.assertEqual(t.count(project.INSTRUCTIONS_BEGIN), 1)
+
+    def test_failed_instruction_write_leaves_no_tmp_file(self):
+        from unittest import mock
+        with mock.patch("os.replace", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                project.write_instructions(self.proj)
+        self.assertEqual(sorted(p.name for p in self.proj.glob("*.tmp")), [])
+
+    def test_missing_instructions(self):
+        self.assertEqual(project.missing_instructions(self.proj), [])
+        (self.proj / "AGENTS.md").unlink()
+        (self.proj / "CLAUDE.md").write_text(f"{project.INSTRUCTIONS_BEGIN}\nno end\n")
+        self.assertEqual(project.missing_instructions(self.proj), ["AGENTS.md", "CLAUDE.md"])
+
+    def _cli(self, cwd, *args, home=None):
+        env = {**os.environ, "PYTHONPATH": str(ROOT / "scripts")}
+        if home:
+            env["HOME"] = str(home)
+        return subprocess.run([sys.executable, "-m", "kinetic", "project", *args],
+                              cwd=cwd, capture_output=True, text=True, env=env)
+
+    def test_cli_start_session_ok_outside_project(self):
+        home = self.tmp / "home"
+        home.mkdir()
+        for cwd in (self.tmp, self.proj):
+            p = self._cli(cwd, "start-session", home=home)
+            self.assertEqual((p.returncode, json.loads(p.stdout)), (0, {"ok": True}))
+        self.assertEqual(list(home.iterdir()), [])
+
+    def test_cli_run_dir_reports_exists(self):
+        (self.proj / "runs/r1").mkdir()
+        self.assertTrue(json.loads(self._cli(self.proj, "run-dir", "--id", "r1").stdout)["exists"])
+        self.assertFalse(json.loads(self._cli(self.proj, "run-dir", "--id", "r2").stdout)["exists"])
+
+    def test_cli_instructions_rewrites(self):
+        (self.proj / "CLAUDE.md").unlink()
+        out = json.loads(self._cli(self.proj, "instructions").stdout)
+        self.assertEqual(len(out["written"]), 2)
+        self.assertEqual(project.missing_instructions(self.proj), [])
 
     def test_update_atomic_keeps_unknown_keys(self):
         path = self.proj / ".kinetic/config.json"

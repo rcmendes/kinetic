@@ -26,6 +26,11 @@ SKILLS = {"ask", "bare-clone", "bare-refresh", "catalog-refresh", "catalog-setup
           "decompose", "discover", "doctor", "grill", "implement", "retro", "run", "ship",
           "specify", "start", "status", "tdd"}
 
+# The phase skills that stop and point to kinetic next_step when no Run: is passed.
+PHASE_SKILLS = ("grill", "discover", "specify", "decompose", "ship", "retro")
+GUARD_LINE = ("If the orchestrator passed no `Run:`, run `kinetic next_step`, tell the user "
+              "its `command` and `reason` in one line, and stop.")
+
 # Global config and bookkeeping paths the project layout replaced.
 STALE = ("~/.config/kinetic/repos.json", "repos.json", "workspace_root", "active-run", "bare_dir",
          "kinetic bare show", "kinetic bare set", "kinetic bare detect", "/kinetic:bare-setup",
@@ -241,6 +246,32 @@ class SkillTextTest(unittest.TestCase):
         self.assertIn("kinetic catalog apply", text)
         self.assertIn("writes nothing", text)
         self.assertNotIn("git commit", text)
+
+    def test_phase_skills_guard_line(self):
+        for name in PHASE_SKILLS:
+            self.assertIn(GUARD_LINE, _body(ROOT / "skills" / name / "SKILL.md"), name)
+        for name in sorted(SKILLS - set(PHASE_SKILLS)):
+            self.assertNotIn(GUARD_LINE, _body(ROOT / "skills" / name / "SKILL.md"), name)
+
+    def test_start_marks_session_before_project_check(self):
+        text = (ROOT / "skills" / "start" / "SKILL.md").read_text()
+        self.assertIn("kinetic project start-session", text)
+        self.assertLess(text.index("kinetic project start-session"),
+                        text.index("kinetic project find"))
+
+    def test_start_and_run_ask_run_id(self):
+        for name in ("start", "run"):
+            text = (ROOT / "skills" / name / "SKILL.md").read_text()
+            for needle in ("(recommended)", "Another id: type it", "kinetic project run-dir --id <id>",
+                           '"exists": true', "the harness's question tool when the profile names one"):
+                self.assertIn(needle, text, name)
+
+    def test_run_resumes_or_suffixes_an_existing_recommended_id(self):
+        text = (ROOT / "skills" / "run" / "SKILL.md").read_text()
+        for needle in ("kinetic project run-dir --id <recommended>", "resume that run",
+                       "next free numeric suffix (`-2`, `-3`, ...)", '"phase"'):
+            self.assertIn(needle, text)
+        self.assertLess(text.index("kinetic project run-dir --id <recommended>"), text.index("Run id?"))
 
 
 if __name__ == "__main__":

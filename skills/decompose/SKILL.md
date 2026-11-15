@@ -8,6 +8,8 @@ model: sonnet
 
 Break the spec into **slices** (tracer-bullet vertical slices, each a parent ticket) and, per slice, one **child ticket per repo** it touches. The child ticket is the unit an agent implements; the slice stays the unit you demo and verify. This skill never invokes another skill.
 
+If the orchestrator passed no `Run:`, run `kinetic next_step`, tell the user its `command` and `reason` in one line, and stop.
+
 The orchestrator passes `Run: <dir>` (the run directory, `<project>/runs/<run-id>/`) and the spec location. The repos in play are the run's repos: `kinetic state load --run <dir>` lists them under `repos`, each with its integration worktree path. Explore code there, not in the user's own checkouts. `<dir>/discovery.md` says why each repo is in the run.
 
 Every agent ticket's repo must be one of the run's repos; `graph validate` reports any other as an error. If the slicing shows another repo is needed, stop and tell the orchestrator which repo and why: it runs discover for it and brings you back. Run scripts as `kinetic <module> ...`.

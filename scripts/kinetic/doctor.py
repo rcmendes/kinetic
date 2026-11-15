@@ -42,6 +42,14 @@ def _project_check(project_config: Path) -> dict:
     return _r("project-config", "pass")
 
 
+def _instructions_check(project_dir: Path) -> dict:
+    missing = project.missing_instructions(project_dir)
+    if missing:
+        return _r("project-instructions", "warn",
+                  f"missing kinetic block in {', '.join(missing)}; run: kinetic project instructions")
+    return _r("project-instructions", "pass")
+
+
 def _resolve_harness(harness_id, settings: Path):
     """(harness id, profile, error). On error the claude profile is returned so
     companion checks keep their pre-harness behaviour."""
@@ -607,6 +615,7 @@ def checks(repos: list[tuple[str, str]], home: Path | None = None,
     if project_config:
         project_res = _project_check(Path(project_config))
         out.append(project_res)
+        out.append(_instructions_check(Path(project_config).parent.parent))
 
     hid, prof, h_err = _resolve_harness(harness_id, settings)
     if h_err:

@@ -110,6 +110,114 @@ class SessionScope(HookCase):
         self.claim("s1", cmd=f"python3 /opt/plugin/bin/kinetic project use-run --run {self.run_dir}")
         self.assertEqual(self.binding("s1"), str(self.run_dir))
 
+    def start(self, sid, cmd="kinetic project start-session", cwd=None):
+        self.claim(sid, cmd=cmd, cwd=cwd or self.home)
+
+    def mark(self, sid):
+        return self.home / ".config" / "kinetic" / "sessions" / sid
+
+    def test_start_session_writes_mark_outside_project(self):
+        self.start("s1")
+        self.assertTrue(self.mark("s1").is_file())
+        self.assertTrue(self.mark("s1").read_text().strip())
+
+    def test_start_session_inside_project_writes_nothing(self):
+        self.start("s1", cwd=self.proj)
+        self.assertFalse(self.mark("s1").exists())
+
+    def test_start_session_via_plugin_bin_path(self):
+        self.start("s1", cmd="python3 /opt/kinetic/bin/kinetic project start-session")
+        self.assertTrue(self.mark("s1").is_file())
+
+    def test_start_session_unsafe_session_id_writes_nothing(self):
+        self.start("../x")
+        self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_has_mark(self):
+        with mock.patch.object(sys, "path", [str(HOOKS), *sys.path]):
+            import _common
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}):
+            self.assertFalse(_common.has_mark({"session_id": "s1"}))
+            self.start("s1")
+            self.assertTrue(_common.has_mark({"session_id": "s1"}))
+            self.assertFalse(_common.has_mark({"session_id": "../s1"}))
+
+    def test_sweep_deletes_mark_older_than_7_days_keeps_newer(self):
+        self.start("old")
+        self.start("new")
+        t = os.path.getmtime(self.mark("old")) - 8 * 86400
+        os.utime(self.mark("old"), (t, t))
+        self.start("trigger")
+        self.assertFalse(self.mark("old").exists())
+        self.assertTrue(self.mark("new").exists())
+
+    def test_sweep_keeps_old_binding_of_open_run_and_drops_done_or_gone(self):
+        self.activate()
+        done = project.run_dir(self.proj, "done-run")
+        state.init(done, "feature", "X-2")
+        state._mutate(done, lambda s: s.update(phase="done"))
+        self.bind("open")
+        self.bind("done", done)
+        self.bind("gone", self.proj / "runs" / "nope")
+        for sid in ("open", "done", "gone"):
+            self.age(self.proj / ".kinetic" / "sessions" / sid, 30 * 86400)
+        self.claim("s1")
+        self.assertEqual(self.binding("open"), str(self.run_dir))
+        self.assertIsNone(self.binding("done"))
+        self.assertIsNone(self.binding("gone"))
+
+    def age(self, f, seconds):
+        t = os.path.getmtime(f) - seconds
+        os.utime(f, (t, t))
+
+    def sweep(self, proj=None):
+        with mock.patch.object(sys, "path", [str(HOOKS), *sys.path]):
+            import _common
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}):
+            _common.sweep_sessions(proj)
+
+    def test_sweep_keeps_empty_or_fresh_binding(self):
+        self.activate()
+        (self.proj / ".kinetic" / "sessions" / "empty").write_text("")
+        self.age(self.proj / ".kinetic" / "sessions" / "empty", 3600)
+        self.bind("fresh", self.proj / "runs" / "nope")  # another session's write in flight
+        self.bind("gone", self.proj / "runs" / "nope")
+        self.age(self.proj / ".kinetic" / "sessions" / "gone", 3600)
+        self.sweep(self.proj)
+        self.assertEqual(self.binding("empty"), "")
+        self.assertIsNotNone(self.binding("fresh"))
+        self.assertIsNone(self.binding("gone"))
+
+    def test_sweep_skips_symlinked_sessions_folders(self):
+        self.activate()
+        for real, link in ((self.home.parent / "marks", self.home / ".config" / "kinetic" / "sessions"),
+                           (self.home.parent / "bindings", self.proj / ".kinetic" / "sessions")):
+            real.mkdir()
+            (real / "x").write_text(str(self.proj / "runs" / "nope"))
+            self.age(real / "x", 30 * 86400)
+            link.parent.mkdir(parents=True, exist_ok=True)
+            if link.exists():
+                link.rmdir()
+            link.symlink_to(real)
+        self.sweep(self.proj)
+        self.assertTrue((self.home.parent / "marks" / "x").exists())
+        self.assertTrue((self.home.parent / "bindings" / "x").exists())
+
+    def test_chained_commands_still_mark_and_bind(self):
+        self.activate()
+        for i, sep in enumerate((";", "&&", "|")):
+            self.start(f"m{i}", cmd=f"kinetic project start-session{sep}kinetic project find")
+            self.assertTrue(self.mark(f"m{i}").is_file(), sep)
+            self.claim(f"b{i}", cmd=f"kinetic project use-run --run {self.run_dir}{sep}echo ok")
+            self.assertEqual(self.binding(f"b{i}"), str(self.run_dir), sep)
+
+    def test_quoted_kinetic_path_with_spaces(self):
+        self.activate()
+        self.start("m", cmd="python3 '/opt/my plugin/bin/kinetic' project start-session;echo ok")
+        self.assertTrue(self.mark("m").is_file())
+        self.claim("b", cmd=f'python3 "/opt/my plugin/bin/kinetic" project use-run --run {self.run_dir}&&echo ok')
+        self.assertEqual(self.binding("b"), str(self.run_dir))
+
     def test_bound_session_isolated_after_cd_out_of_project(self):
         self.activate()
         self.claim("s1")
@@ -810,6 +918,18 @@ class OpenCodeHooks(HookCase):
     def decision(self, out):
         return out.get("decision") if out else None
 
+    def test_skill_tool_is_guarded_in_opencode_shape(self):
+        # OpenCode v2 (probed 2.2.5): tool "skill", the skill name in input.id
+        self.activate()
+        out = self.oc("skill_guard", self.pre("skill", {"id": "superpowers:brainstorming"}))
+        self.assertEqual(out["decision"], "deny")
+        self.assertIn("kinetic run", out["reason"])
+        self.assertNotIn("hookSpecificOutput", out)
+        self.assertIsNone(self.oc("skill_guard", self.pre("skill", {"id": "kntc-run"})))
+        self.assertIsNone(self.oc("skill_guard", self.pre("skill", {"id": "systematic-debugging"})))
+        self.assertIsNone(self.oc("skill_guard", self.pre("skill", {})))
+        self.assertIsNone(self.oc("skill_guard", self.pre("shell", {"command": "ls"})))
+
     def test_edit_outside_is_denied_in_opencode_shape(self):
         self.activate()
         out = self.oc("isolation", self.pre("edit", {"path": "/etc/passwd"}))
@@ -990,6 +1110,23 @@ class RecordEditAndOrient(HookCase):
             "hookSpecificOutput"]["additionalContext"]
         self.assertIn("feature", text)
 
+    def test_orient_sweeps_old_marks_at_session_start(self):
+        marks = self.home / ".config" / "kinetic" / "sessions"
+        marks.mkdir(parents=True)
+        (marks / "old").write_text("x")
+        t = os.path.getmtime(marks / "old") - 8 * 86400
+        os.utime(marks / "old", (t, t))
+        (marks / "new").write_text("x")
+        self.hook("orient", {"cwd": str(self.home), "session_id": "s1"})
+        self.assertFalse((marks / "old").exists())
+        self.assertTrue((marks / "new").exists())
+
+    def test_orient_open_run_points_to_run(self):
+        self.activate()
+        text = self.hook("orient", {})["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("next: /kinetic:run", text)
+        self.assertIn("why: resume at intake", text)
+
     def test_orient_prints_at_most_five_lines(self):
         self.activate()
         out = self.hook("orient", {})["hookSpecificOutput"]
@@ -1009,9 +1146,129 @@ class RecordEditAndOrient(HookCase):
     def test_hooks_json_passes_harness_claude(self):
         cfg = json.loads((HOOKS / "hooks.json").read_text())["hooks"]
         cmds = [h["command"] for ms in cfg.values() for m in ms for h in m["hooks"]]
-        self.assertEqual(len(cmds), 7)
+        self.assertEqual(len(cmds), 8)
         for c in cmds:
             self.assertIn("--harness claude", c)
+
+    def test_hooks_json_wires_skill_guard(self):
+        groups = json.loads((HOOKS / "hooks.json").read_text())["hooks"]["PreToolUse"]
+        cmds = [h["command"] for g in groups if g["matcher"] == "^Skill$" for h in g["hooks"]]
+        self.assertEqual(len(cmds), 1)
+        self.assertIn("skill_guard.py\" --harness claude", cmds[0])
+
+
+class SkillGuard(HookCase):
+    def skill(self, name, sid="s1", cwd=None, raw_input=None):
+        payload = {"tool_name": "Skill", "tool_input": {"skill": name} if raw_input is None else raw_input,
+                   "session_id": sid, "cwd": str(cwd or self.home)}
+        if raw_input == "missing":
+            del payload["tool_input"]
+        return self.hook("skill_guard", payload)
+
+    def in_run(self, name):
+        self.activate()
+        return self.skill(name, cwd=self.run_dir)
+
+    def mark(self, sid="s1"):
+        f = self.home / ".config" / "kinetic" / "sessions" / sid
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("2026-11-15T00:00:00Z")
+
+    def set_deny(self, value):
+        cfg = self.proj / ".kinetic" / "config.json"
+        data = json.loads(cfg.read_text()) if cfg.is_file() else {}
+        data["skill_guard"] = {"deny": value}
+        cfg.write_text(json.dumps(data))
+
+    def reason(self, out):
+        return out["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_skill_guard_denies_listed_skill_in_run(self):
+        out = self.in_run("superpowers:brainstorming")
+        self.assertEqual(self.decision(out), "deny")
+        phase = state.load(self.run_dir)["phase"]
+        r = self.reason(out)
+        self.assertTrue(r.startswith(f"kinetic run {self.run_dir.name} is active (phase {phase}). Next: "), r)
+        self.assertTrue(r.endswith("."), r)
+
+    def test_skill_guard_asks_in_marked_session(self):
+        self.mark()
+        out = self.skill("mattpocock-skills:grilling")
+        self.assertEqual(self.decision(out), "ask")
+        self.assertEqual(self.reason(out),
+                         "This conversation was started with /kinetic:start. Allow mattpocock-skills:grilling?")
+
+    def test_skill_guard_silent_for_unlisted_kinetic_and_unmarked(self):
+        names = ("superpowers:receiving-code-review", "kinetic:grill", "kntc-run")
+        self.mark()
+        for name in names:
+            self.assertIsNone(self.skill(name), name)
+        self.activate()
+        for name in names:
+            self.assertIsNone(self.skill(name, cwd=self.run_dir), name)
+        # a listed skill in a session with no run and no mark
+        self.assertIsNone(self.skill("superpowers:brainstorming", sid="s9"))
+
+    def test_skill_guard_leading_slash_matches(self):
+        self.mark()
+        out = self.skill("/grilling")
+        self.assertEqual(self.decision(out), "ask")
+        self.assertTrue(self.reason(out).endswith("Allow grilling?"))
+        self.assertEqual(self.decision(self.in_run("/superpowers:writing-plans")), "deny")
+
+    def test_skill_guard_unreadable_input_passes(self):
+        self.mark()
+        self.activate()
+        for raw in ("missing", "x", {"skill": 5}, {}):
+            self.assertIsNone(self.skill(None, cwd=self.run_dir, raw_input=raw), raw)
+
+    def test_skill_guard_project_deny_list_replaces_default(self):
+        self.set_deny(["my-flow"])
+        self.assertEqual(self.decision(self.in_run("my-flow")), "deny")
+        self.assertIsNone(self.skill("superpowers:brainstorming", cwd=self.run_dir))
+        # a marked session outside every project keeps the default list
+        self.mark()
+        self.assertIsNone(self.skill("my-flow"))
+        self.assertEqual(self.decision(self.skill("superpowers:brainstorming")), "ask")
+
+    def test_skill_guard_malformed_project_deny_uses_default(self):
+        self.activate()
+        for bad in ("x", 3, ["ok", 4]):
+            self.set_deny(bad)
+            self.assertEqual(self.decision(self.skill("superpowers:brainstorming", cwd=self.run_dir)), "deny", bad)
+
+    def test_skill_guard_done_run_is_no_run(self):
+        self.activate()
+        self.bind("s1")
+        state._mutate(self.run_dir, lambda s: s.update(phase="done"))
+        self.assertIsNone(self.skill("superpowers:brainstorming", cwd=self.proj))
+        self.mark()
+        self.assertEqual(self.decision(self.skill("superpowers:brainstorming", cwd=self.proj)), "ask")
+
+    def test_skill_guard_deny_reason_points_to_run(self):
+        self.assertTrue(self.reason(self.in_run("triage")).endswith("Next: /kinetic:run."))
+
+    def test_skill_guard_default_list_has_bare_superpowers_names(self):
+        names = ("brainstorming", "writing-plans", "executing-plans", "subagent-driven-development",
+                 "using-git-worktrees", "finishing-a-development-branch")
+        self.mark()
+        for name in names:
+            self.assertEqual(self.decision(self.skill(name)), "ask", name)
+        self.activate()
+        for name in names:
+            self.assertEqual(self.decision(self.skill(name, cwd=self.run_dir)), "deny", name)
+
+    def test_skill_guard_denies_without_next_when_suggest_fails(self):
+        with mock.patch.object(sys, "path", [str(HOOKS), *sys.path]):
+            import skill_guard
+        self.activate()
+        out = []
+        with mock.patch.object(skill_guard._common, "pre_tool", lambda d, r: out.append((d, r))), \
+                mock.patch("kinetic.next_step.suggest", side_effect=RuntimeError("boom")):
+            skill_guard.main({"tool_name": "Skill", "tool_input": {"skill": "triage"},
+                              "session_id": "s1", "cwd": str(self.run_dir)})
+        phase = state.load(self.run_dir)["phase"]
+        self.assertEqual(out, [("deny", f"kinetic run {self.run_dir.name} is active (phase {phase}).")])
 
 
 
