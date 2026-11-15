@@ -26,6 +26,15 @@ class VerifyTest(unittest.TestCase):
     def _verify_cmd(self, cmd):
         (self.repo / ".kinetic.json").write_text(json.dumps({"verify": cmd}))
 
+    def test_verify_ticket_scope_uses_verify_ticket(self):
+        (self.repo / ".kinetic.json").write_text(json.dumps({"verify": "false", "verify_ticket": "true"}))
+        self.assertEqual(verify.run(self.run_dir, "T-1", "svc", self.repo, self.central, scope="ticket")["exit_code"], 0)
+        self.assertEqual(verify.run(self.run_dir, "T-1", "svc", self.repo, self.central)["exit_code"], 1)
+
+    def test_verify_ticket_scope_falls_back_to_verify(self):
+        self._verify_cmd("false")
+        self.assertEqual(verify.run(self.run_dir, "T-1", "svc", self.repo, self.central, scope="ticket")["exit_code"], 1)
+
     def test_records_exit_code(self):
         for cmd, code in (("true", 0), ("false", 1)):
             self._verify_cmd(cmd)

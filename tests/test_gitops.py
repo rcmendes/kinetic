@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kinetic import gitops, state
+from kinetic import gitops, project, state
 
 
 def git(path, *args):
@@ -334,6 +334,48 @@ class PinTests(unittest.TestCase):
         self.assertFalse(res["ok"])
         self.assertTrue(Path(res["log_path"]).is_file())
         self.assertFalse(state.load(self.run_dir)["tickets"]["T1"]["snapshot_published"])
+
+
+class SetupTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.project = project.create(root, "proj")
+        self.central = self.project / ".kinetic" / "config.json"
+        self.run_dir = project.run_dir(self.project, "r1")
+        state.init(self.run_dir, "quick", "X-1")
+        self.wt = root / "wt"
+        self.wt.mkdir()
+
+    def _setup_cmd(self, cmd):
+        cfg = {"verify": "true"}
+        if cmd is not None:
+            cfg["setup"] = cmd
+        self.central.write_text(json.dumps({"version": 1, "repos": {"svc": cfg}}))
+
+    def test_setup_skipped_when_unset(self):
+        self._setup_cmd(None)
+        self.assertEqual(gitops.run_setup(self.run_dir, "svc", self.wt, self.central),
+                         {"ok": True, "skipped": True, "log_path": None})
+
+    def test_setup_runs_in_worktree(self):
+        self._setup_cmd("echo hi > made.txt")
+        res = gitops.run_setup(self.run_dir, "svc", self.wt, self.central)
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["skipped"])
+        self.assertTrue((self.wt / "made.txt").is_file())
+
+    def test_setup_failure_logs_and_reports(self):
+        self._setup_cmd("echo boom; exit 3")
+        res = gitops.run_setup(self.run_dir, "svc", self.wt, self.central)
+        self.assertFalse(res["ok"])
+        self.assertFalse(res["skipped"])
+        log = Path(res["log_path"])
+        self.assertEqual(log.parent, self.run_dir / ".kinetic" / "logs")
+        self.assertTrue(log.name.startswith("setup-wt-"))
+        self.assertIn("boom", log.read_text())
+        self.assertTrue(self.wt.is_dir())
 
 
 if __name__ == "__main__":
