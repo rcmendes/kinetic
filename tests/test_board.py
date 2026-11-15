@@ -84,6 +84,12 @@ class BoardTest(unittest.TestCase):
         self.assertLess(text.index("## Waiting on you"), text.index("01: Build lib"))
         self.assertLess(text.index("02-you"), text.index("01: Build lib"))
 
+    def test_render_shows_spec_only_when_recorded(self):
+        run = mk(self.tmp, {"01-lib-x-a": {"repo": "lib-x"}})
+        self.assertNotIn("Spec:", board.render(run).read_text())
+        state.set_spec(run, "spec.md")
+        self.assertIn("\nSpec: spec.md\n", board.render(run).read_text())
+
     def test_drift_reports_hand_edit(self):
         run = mk(self.tmp, {"01-lib-x-a": {"repo": "lib-x", "slice": "01-s"}})
         board.write_header(run, "01-lib-x-a")

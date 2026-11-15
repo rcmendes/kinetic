@@ -144,7 +144,7 @@ def render(run_dir) -> Path:
         return f"| {i} | {title} | {v['Type']} | {v['Status']} | {blocked} | {v['After']} |"
 
     head = ["| id | title | type | status | blocked by | after |", "|---|---|---|---|---|---|"]
-    out = ["# Board", ""]
+    out = ["# Board", ""] + ([f"Spec: {st['spec']}", ""] if st.get("spec") else [])
     if waiting:
         out += ["## Waiting on you", ""] + head + [row(i) for i in waiting] + [""]
     out += ["## Tickets", ""] + head + [row(i) for i in rest] + [""]

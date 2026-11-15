@@ -104,6 +104,8 @@ First record the approved slice ids, before any child ticket, so `graph validate
 kinetic state set-slices --run <dir> --slices '["<slice-id>","<slice-id>"]'
 ```
 
+`set-slices` does not touch the spec: `specify` already recorded it with `set-spec`. The spec, slices and tickets are walked with `kinetic trace --run <dir>` (add `--id <spec|slice|ticket>` for one branch).
+
 Then, for every child ticket (`blocked_by` is a JSON list of `{"id","type"}`; use `[]` when none):
 
 ```

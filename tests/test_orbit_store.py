@@ -316,6 +316,16 @@ class OrbitPublishTest(unittest.TestCase):
         self.run_dir, self.board = make_orbit_run(Path(self._tmp.name))
         stage_two(self.run_dir)
 
+    def test_publish_annotates_slice_with_spec_only_when_recorded(self):
+        state.set_spec(self.run_dir, "spec.md")
+        core = state.publish_tickets(self.run_dir)["01-core"]
+        self.assertEqual(orbit_json(self.board, "show", core)["annotations"]["kinetic"],
+                         {"spec": "spec.md"})
+
+    def test_publish_without_spec_adds_no_slice_annotation(self):
+        core = state.publish_tickets(self.run_dir)["01-core"]
+        self.assertNotIn("kinetic", orbit_json(self.board, "show", core).get("annotations") or {})
+
     def test_publish_creates_tasks_and_rewrites_ids(self):
         mapping = state.publish_tickets(self.run_dir)
         a, b, core = mapping["01-api-a"], mapping["02-web-b"], mapping["01-core"]
