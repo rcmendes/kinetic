@@ -199,17 +199,28 @@ class OrbitTicketStore:
         self.config = config
 
     # -- configuration resolved on first use, then kept in state.json --
-    def _names(self) -> dict:
+    @staticmethod
+    def _project(st: dict) -> Path:
+        """The project of this run (from its run dir), else of the cwd."""
+        from kinetic import project
+        try:
+            return project.require(st.get("run_dir"))
+        except project.NoProject as e:
+            raise OrbitStoreError("BOARD_NOT_FOUND", str(e), "run from inside a kinetic project")
+
+    def _names(self, st: dict) -> dict:
         if not self.config.get("names"):
-            from kinetic import project, tracker
-            self.config["names"] = tracker.resolve(settings=project.config_path())["names"]
+            from kinetic import tracker
+            cfg = self._project(st) / ".kinetic" / "config.json"
+            self.config["names"] = tracker.resolve(settings=cfg)["names"]
         return self.config["names"]
 
     def _anchor(self, st: dict) -> str:
         if not self.config.get("anchor"):
-            from kinetic import project, tracker
-            settings = tracker.resolve(settings=project.config_path())["settings"]
-            anchor = settings.get("orbit_dir") or project.require()
+            from kinetic import tracker
+            proj = self._project(st)
+            settings = tracker.resolve(settings=proj / ".kinetic" / "config.json")["settings"]
+            anchor = settings.get("orbit_dir") or proj
             self.config["anchor"] = str(Path(anchor).expanduser())
         return self.config["anchor"]
 
@@ -246,7 +257,7 @@ class OrbitTicketStore:
     def _read_published(self, st: dict) -> dict:
         if not self.config.get("anchor") and not st.get("repos"):
             return {}  # nothing published before the run has a Board
-        run_id, names = st["run_id"], self._names()
+        run_id, names = st["run_id"], self._names(st)
         data = call(self._anchor(st), ["list", "--include-closed", "--all",
                                        "--label", run_label(run_id, names)])
         tasks = data.get("tasks", [])
@@ -284,7 +295,7 @@ class OrbitTicketStore:
 
     def write(self, run_dir, st: dict, before: dict, after: dict) -> None:
         staged = self._staged(run_dir)
-        run_id, names = st["run_id"], self._names()
+        run_id, names = st["run_id"], self._names(st)
         # After the first publish, a new ticket (a NEEDS_HUMAN ticket, a review fix)
         # goes to the Board in this same Batch instead of waiting in the staged file.
         published = bool(self.config.get("published"))
@@ -321,7 +332,7 @@ class OrbitTicketStore:
     def _add_ops(self, run_dir, st: dict, tickets: dict, new_slices: list, aliases: dict):
         """`add` operations for slices and tickets not yet on the Board; returns (ops, order)."""
         from kinetic import graph
-        run_id, names = st["run_id"], self._names()
+        run_id, names = st["run_id"], self._names(st)
         ref = self._ref(run_id, set(tickets) | set(new_slices), aliases)
         ops = [{"op": "add", "key": source_key(run_id, s), "title": ticket_text(run_dir, s)[0],
                 "type": "epic", "labels": [run_label(run_id, names)]} for s in new_slices]

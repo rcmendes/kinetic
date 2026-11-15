@@ -169,6 +169,17 @@ class DoctorTest(unittest.TestCase):
         self.central.write_text("{}")
         self.assertEqual(self._by_name()["project-config"]["status"], "pass")
 
+    def test_cli_checks_project_repos_when_no_repo_flag(self):
+        self._write_project(repos={"svc": {"path": str(self.repo)}, "gone": {"path": str(self.tmp / "nope")}})
+        out = io.StringIO()
+        with mock.patch.object(doctor.harness, "DEFAULT_SETTINGS", self.settings), \
+                mock.patch.object(doctor.Path, "home", return_value=self.home), \
+                mock.patch("os.getcwd", return_value=str(self.project)), \
+                contextlib.redirect_stdout(out):
+            doctor.main([])
+        c = {x["name"]: x["status"] for x in json.loads(out.getvalue())["checks"]}
+        self.assertEqual((c["verify:svc"], c["verify:gone"]), ("pass", "fail"))
+
     def test_doctor_outside_project_machine_only(self):
         res = doctor.checks([("svc", str(self.repo))], self.home, None, settings=self.settings)
         names = {c["name"] for c in res}

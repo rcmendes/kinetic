@@ -153,6 +153,14 @@ class FakeOrbitTest(unittest.TestCase):
             project.update(proj, {"tracker_settings": {"orbit_dir": "/board2"}})
             self.assertEqual(orbit_store.OrbitTicketStore({})._anchor({}), "/board2")
 
+    def test_outside_project_is_board_not_found(self):
+        store = orbit_store.OrbitTicketStore({})
+        st = {"run_dir": str(self.run_dir)}
+        for call_ in (lambda: store._names(st), lambda: store._anchor(st)):
+            with self.assertRaises(orbit_store.OrbitStoreError) as caught:
+                call_()
+            self.assertEqual(caught.exception.code, "BOARD_NOT_FOUND")
+
     def publish_one(self, tid="orb-a.b", **fields):
         self.tasks.append(task_json(tid, ticket(repo="api", **fields)))
 

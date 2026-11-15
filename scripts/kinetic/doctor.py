@@ -712,6 +712,12 @@ def main(argv: list[str] | None = None) -> int:
     settings = harness.DEFAULT_SETTINGS
     home = Path.home()
     found = project.find()
+    if found and not repos:
+        try:
+            repos = [(n, e["path"]) for n, e in (project.load(found).get("repos") or {}).items()
+                     if isinstance(e, dict) and e.get("path")]
+        except config.ConfigError:
+            pass  # the project-config check reports it
     res = checks(repos, home=home, settings=settings, harness_id=args.harness,
                  project_config=found / ".kinetic" / "config.json" if found else None)
     ok = all(c["status"] != "fail" for c in res)
