@@ -151,8 +151,13 @@ def _norm_codex(inp: dict) -> dict:
     "Bash", file edits are "apply_patch"). apply_patch carries the raw patch
     text in tool_input.command; every file header is extracted into
     tool_input.file_paths. The list is set even when empty so fail-closed
-    hooks can tell "no paths parsed" apart from "not a patch tool"."""
+    hooks can tell "no paths parsed" apart from "not a patch tool".
+
+    A shell call made with the tool's workdir reports that workdir as cwd and
+    carries no other trace of the session dir, but Codex runs the hook process
+    in the session dir (checked on codex-cli 0.169.0), so that is the launch dir."""
     out = dict(inp)
+    out.setdefault("launch_dir", os.getcwd())
     raw_ti = inp.get("tool_input")
     ti = dict(raw_ti) if isinstance(raw_ti, dict) else {}
     name = out.get("tool_name")
@@ -241,9 +246,9 @@ def session_file(proj, sid):
 
 
 def _launch_dir(inp: dict):
-    """The folder the harness session was started in: the OpenCode session dir kept by its
-    normaliser, else CLAUDE_PROJECT_DIR / DEVIN_PROJECT_DIR (Devin's normaliser only fills a
-    missing cwd). Codex sends the session cwd as cwd and never narrows it."""
+    """The folder the harness session was started in: the session dir kept by the OpenCode
+    and Codex normalisers, else CLAUDE_PROJECT_DIR / DEVIN_PROJECT_DIR (Devin's normaliser
+    only fills a missing cwd)."""
     return (inp.get("launch_dir") or os.environ.get("CLAUDE_PROJECT_DIR")
             or os.environ.get("DEVIN_PROJECT_DIR"))
 

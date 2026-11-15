@@ -1050,6 +1050,19 @@ class ActiveRunTest(HookCase):
         inp = self._common._normalize(dict(payload, sessionID="s9"), "opencode")
         self.assertIsNone(self.run_of(**inp))
 
+    def test_codex_shell_workdir_outside_project_keeps_bound_run(self):
+        # Codex 0.169 sends the shell call's workdir as cwd (no workdir in tool_input) and
+        # runs the hook process in the session dir: that process cwd is the launch dir.
+        self.bind("s1")
+        payload = {"hook_event_name": "PreToolUse", "session_id": "s1", "cwd": str(self.home),
+                   "tool_name": "Bash", "tool_input": {"command": "pwd"}}
+        with mock.patch.object(os, "getcwd", return_value=str(self.proj)):
+            inp = self._common._normalize(payload, "codex")
+            self.assertEqual(self.run_of(**inp), str(self.run_dir))
+            # no binding for this session: still no run picked
+            inp = self._common._normalize(dict(payload, session_id="s9"), "codex")
+            self.assertIsNone(self.run_of(**inp))
+
     def test_active_run_from_session_binding(self):
         self.bind("s1")
         self.assertEqual(self.run_of(cwd=str(self.proj), session_id="s1"), str(self.run_dir))
