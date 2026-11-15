@@ -13,6 +13,19 @@ from kinetic import config
 
 VERSION = 1
 
+INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
+INSTRUCTIONS_BEGIN = "<!-- kinetic:begin -->"
+INSTRUCTIONS_END = "<!-- kinetic:end -->"
+INSTRUCTIONS_TEXT = """This folder is a kinetic project. Kinetic owns the workflow here.
+
+- Start or resume work with the kinetic run skill (/kinetic:run, or kntc-run where kinetic's
+  skills are installed as kntc-*). Use the implement skill for a ticket that is already specified.
+- Do not start another plugin's process skill for work in this folder: no other brainstorming,
+  planning, spec-writing, ticket-breakdown or implementation-loop skill. Use one only when a
+  kinetic skill names it.
+- Never edit files under .kinetic/ by hand."""
+_BLOCK = f"{INSTRUCTIONS_BEGIN}\n{INSTRUCTIONS_TEXT}\n{INSTRUCTIONS_END}"
+
 
 class NoProject(Exception):
     pass
@@ -92,7 +105,48 @@ def create(parent: Path, name: str) -> Path:
     for sub in (".kinetic/sessions", "bare-repos", "runs"):
         (root / sub).mkdir(parents=True, exist_ok=True)
     _write(_cfg(root), {"version": VERSION, "repos": {}})
+    write_instructions(root)
     return root
+
+
+def _block_span(text: str):
+    """(start, end) of the complete block in text, or None."""
+    i = text.find(INSTRUCTIONS_BEGIN)
+    if i < 0:
+        return None
+    j = text.find(INSTRUCTIONS_END, i)
+    return None if j < 0 else (i, j + len(INSTRUCTIONS_END))
+
+
+def write_instructions(project: Path) -> list:
+    written = []
+    for name in INSTRUCTION_FILES:
+        path = Path(project) / name
+        text = path.read_text() if path.is_file() else ""
+        span = _block_span(text)
+        if span:
+            new = text[:span[0]] + _BLOCK + text[span[1]:]
+        elif text.strip():
+            new = text.rstrip("\n") + "\n\n" + _BLOCK + "\n"
+        else:
+            new = _BLOCK + "\n"
+        tmp = path.with_name(name + ".tmp")
+        tmp.write_text(new)
+        os.replace(tmp, path)
+        written.append(str(path))
+    return written
+
+
+def missing_instructions(project: Path) -> list:
+    out = []
+    for name in INSTRUCTION_FILES:
+        try:
+            ok = _block_span((Path(project) / name).read_text()) is not None
+        except OSError:
+            ok = False
+        if not ok:
+            out.append(name)
+    return out
 
 
 def run_dir(project: Path, run_id: str) -> Path:
@@ -147,6 +201,8 @@ def main(argv=None) -> int:
     sub.add_parser("runs")
     sp = sub.add_parser("run-dir")
     sp.add_argument("--id", required=True)
+    sub.add_parser("instructions")
+    sub.add_parser("start-session")
     sub.add_parser("current-run")
     sp = sub.add_parser("use-run")
     sp.add_argument("--run", required=True)
@@ -154,6 +210,8 @@ def main(argv=None) -> int:
     try:
         if a.cmd == "create":
             out = {"project": str(create(Path(a.parent), a.name))}
+        elif a.cmd == "start-session":
+            out = {"ok": True}  # a hook reacts to the command; nothing is written here
         else:
             proj = require()
             if a.cmd == "find":
@@ -166,7 +224,10 @@ def main(argv=None) -> int:
             elif a.cmd == "runs":
                 out = open_runs(proj)
             elif a.cmd == "run-dir":
-                out = {"run_dir": str(run_dir(proj, a.id))}
+                rd = run_dir(proj, a.id)
+                out = {"run_dir": str(rd), "exists": rd.exists()}
+            elif a.cmd == "instructions":
+                out = {"written": write_instructions(proj)}
             elif a.cmd == "current-run":
                 r = run_for_path(os.getcwd())
                 out = {"run_dir": str(r) if r else None}
