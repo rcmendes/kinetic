@@ -1,5 +1,5 @@
-"""Bare-clone helpers: the saved bare_dir setting, recognising bare repos, and
-listing the clones under it. Judgment (which folder to use) lives in the skills."""
+"""Bare-clone helpers: recognising bare repos, and listing, cloning and refreshing
+the clones in the project's bare-repos/ folder, plus creating a repo on GitHub."""
 from __future__ import annotations
 
 import argparse
@@ -11,15 +11,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from kinetic import config, discover
-from kinetic.discover import _real, _write
+from kinetic import project
 
-SETTINGS = discover.SETTINGS
-LOCAL_MD = "bare-repos.local.md"
-LOCAL_MD_SOURCE = "~/.claude/" + LOCAL_MD
-SCAN_ROOTS = ["workspace", "code", "src", "dev", "projects", "repos", "git"]
-SKIP_DIRS = {"node_modules", "Library", "target", "build", "dist", ".git"}
-MAX_DEPTH = 3
+VISIBILITIES = ("private", "internal", "public")
 
 
 def is_bare(path) -> bool:
@@ -41,29 +35,6 @@ def _git(path, *args):
     except (OSError, subprocess.SubprocessError):
         return None
     return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
-
-
-def show(path=None):
-    path = Path(path or SETTINGS)
-    value = config._load(path).get("bare_dir")
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise config.ConfigError(f"'bare_dir' in {path} must be a string")
-    return value
-
-
-def set_dir(d: str, create: bool = False, path=None) -> str:
-    path = Path(path or SETTINGS)
-    data = config._load(path)  # raises on bad JSON before anything is written
-    real = _real(d)
-    if not os.path.isdir(real):
-        if not create:
-            raise ValueError(f"not a directory: {d}")
-        Path(real).mkdir(parents=True, exist_ok=True)
-    data["bare_dir"] = real
-    _write(path, data)
-    return real
 
 
 def default_branch(clone):
@@ -109,7 +80,7 @@ def clone(bare_dir, repo=None, url=None, name=None) -> dict:
         raise ValueError("give either --repo ORG/NAME, or --url together with --name")
     if not _valid_name(name):
         raise ValueError(f"--name must be a single path component, got: {name}")
-    dest = root / name
+    dest = root / (name if name.endswith(".git") else name + ".git")
     if dest.exists():
         raise ValueError(f"already exists: {dest}")
     try:
@@ -126,7 +97,7 @@ def clone(bare_dir, repo=None, url=None, name=None) -> dict:
     except RuntimeError:
         shutil.rmtree(dest, ignore_errors=True)  # no half-made clone left to block a retry
         raise
-    return {"name": name, "path": str(dest), "default_branch": branch}
+    return {"name": dest.name, "path": str(dest), "default_branch": branch}
 
 
 def _origin_refs(clone_path) -> dict:
@@ -170,138 +141,58 @@ def refresh(bare_dir, names=None) -> list:
         return list(pool.map(lambda n: _refresh_one(bare_dir, n), names))
 
 
-def _scan(home: Path) -> dict:
-    found = {}
-    for name in SCAN_ROOTS:
-        root = home / name
-        if not root.is_dir():
-            continue
-        stack = [(root, 0)]
-        while stack:
-            d, depth = stack.pop()
-            try:
-                children = sorted(c for c in d.iterdir() if c.is_dir() and not c.is_symlink())
-            except OSError:
-                continue
-            for c in children:
-                if is_bare(c):
-                    found[d] = found.get(d, 0) + 1
-                elif depth < MAX_DEPTH and c.name not in SKIP_DIRS and (
-                        not c.name.startswith(".") or c.name == ".bare"):
-                    stack.append((c, depth + 1))
-    return found
-
-
-def _cwd_container(cwd: Path):
-    out = _git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
-    if not out:
-        return None
-    common = Path(out)
-    return common.parent if is_bare(common) else None
-
-
-def _local_md_hint(home: Path):
-    p = home / ".claude" / LOCAL_MD
+def gh_ready() -> bool:
+    if not shutil.which("gh"):
+        return False
     try:
-        lines = p.read_text().splitlines()
+        return subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
     except OSError:
-        return None
-    in_fm = False
-    for i, line in enumerate(lines):
-        if line.strip() == "---":
-            if i == 0:
-                in_fm = True
-                continue
-            break
-        if in_fm and ":" in line:
-            k, v = line.split(":", 1)
-            if k.strip() == "bare_repos_dir" and v.strip():
-                val = v.strip()
-                if val == "~" or val.startswith("~/"):
-                    val = str(home) + val[1:]
-                return os.path.abspath(val)
-    return None
+        return False
 
 
-def detect(cwd, path=None, home=None) -> dict:
-    home = Path(home) if home else Path.home()
-    saved = show(path)
-    candidates = []
-    seen = set()
-
-    def add(p, source, n):
-        if p not in seen:
-            seen.add(p)
-            candidates.append({"path": p, "source": source, "bare_repo_count": n})
-
-    from_cwd = _cwd_container(Path(_real(str(cwd))))
-    scanned = sorted(_scan(home).items(), key=lambda kv: (-kv[1], str(kv[0])))
-    hint = _local_md_hint(home)
-    if hint:
-        seen.add(hint)  # added last, below, so the 5-candidate cap cannot drop it
-    if from_cwd:
-        add(str(from_cwd), "current directory belongs to a bare repo",
-            len(list_clones(str(from_cwd))))
-    for p, n in scanned:
-        add(str(p), "existing bare repos found", n)
-    if hint:
-        candidates = candidates[:4]
-        candidates.append({"path": hint, "source": LOCAL_MD_SOURCE,
-                           "bare_repo_count": len(list_clones(hint))})
-
-    if saved:
-        rec = {"path": saved, "reason": "already saved"}
-    elif from_cwd:
-        rec = {"path": str(from_cwd), "reason": "current directory belongs to a bare repo"}
-    elif scanned:
-        p, n = scanned[0]
-        rec = {"path": str(p), "reason": f"existing bare repos found ({n} repos)"}
-    elif hint:
-        rec = {"path": hint, "reason": f"named in {LOCAL_MD_SOURCE}"}
-    else:
-        rec = None
-    return {"saved": saved, "candidates": candidates[:5], "recommendation": rec}
+def create(bare_dir, owner: str, name: str, visibility: str) -> dict:
+    if visibility not in VISIBILITIES:
+        raise ValueError(f"visibility must be one of {', '.join(VISIBILITIES)}, got: {visibility}")
+    _run(["gh", "repo", "create", f"{owner}/{name}", f"--{visibility}", "--add-readme"])
+    return clone(bare_dir, repo=f"{owner}/{name}")
 
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="kinetic.bare")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sp = sub.add_parser("detect")
-    sp.add_argument("--cwd", default=None)
-    sp = sub.add_parser("set")
-    sp.add_argument("--dir", required=True)
-    sp.add_argument("--create", action="store_true")
-    sub.add_parser("show")
     sub.add_parser("list")
+    sub.add_parser("gh-ready")
     sp = sub.add_parser("clone")
     sp.add_argument("--repo", default=None)
     sp.add_argument("--url", default=None)
     sp.add_argument("--name", default=None)
+    sp = sub.add_parser("create")
+    sp.add_argument("--owner", required=True)
+    sp.add_argument("--name", required=True)
+    sp.add_argument("--visibility", default="private", choices=VISIBILITIES)
     sp = sub.add_parser("refresh")
     sp.add_argument("--name", action="append", default=None)
     a = p.parse_args(argv)
     code = 0
     try:
-        if a.cmd == "detect":
-            out = detect(a.cwd or os.getcwd(), SETTINGS)
-        elif a.cmd == "set":
-            out = {"bare_dir": set_dir(a.dir, a.create, SETTINGS)}
+        if a.cmd == "gh-ready":
+            out = {"ready": gh_ready()}
         else:
-            d = show(SETTINGS)
-            if d is None:
-                print("no bare_dir saved; run 'kinetic bare set --dir PATH'", file=sys.stderr)
-                return 1
-            if a.cmd == "show":
-                out = {"bare_dir": d}
-            elif a.cmd == "list":
+            d = project.bare_dir(project.require())
+            if a.cmd == "list":
                 out = list_clones(d)
             elif a.cmd == "clone":
                 out = clone(d, a.repo, a.url, a.name)
+            elif a.cmd == "create":
+                out = create(d, a.owner, a.name, a.visibility)
             else:
                 results = refresh(d, a.name)
                 out = {"results": results}
                 code = 0 if all(r["ok"] for r in results) else 1
-    except (ValueError, RuntimeError, OSError, config.ConfigError) as e:
+    except project.NoProject as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    except (ValueError, RuntimeError, OSError) as e:
         print(str(e), file=sys.stderr)
         return 1
     print(json.dumps(out))

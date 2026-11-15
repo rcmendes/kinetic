@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import json
+import contextlib
+import io
 import os
 import subprocess
 import tempfile
@@ -8,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from kinetic import bare, config
+from kinetic import bare
 
 
 def git(path, *args):
@@ -57,9 +58,6 @@ class BareTests(unittest.TestCase):
         self._td = tempfile.TemporaryDirectory()
         self.addCleanup(self._td.cleanup)
         self.tmp = Path(os.path.realpath(self._td.name))
-        self.settings = self.tmp / "settings.json"
-        self.home = self.tmp / "home"
-        self.home.mkdir()
 
     def test_is_bare_rejects_lookalikes(self):
         make_remote(self.tmp / "remote")
@@ -73,34 +71,6 @@ class BareTests(unittest.TestCase):
         self.assertFalse(bare.is_bare(fake))
         self.assertFalse(bare.is_bare(self.tmp / "remote"))
         self.assertFalse(bare.is_bare(self.tmp / "remote" / ".git"))
-
-    def test_set_and_show_keep_other_keys(self):
-        self.settings.write_text(json.dumps({"repo_roots": ["/x"], "tracker": "jira"}))
-        d = self.tmp / "bares"
-        d.mkdir()
-        self.assertIsNone(bare.show(path=self.settings))
-        self.assertEqual(bare.set_dir(str(d), path=self.settings), str(d))
-        self.assertEqual(bare.show(path=self.settings), str(d))
-        data = json.loads(self.settings.read_text())
-        self.assertEqual((data["repo_roots"], data["tracker"]), (["/x"], "jira"))
-
-    def test_show_rejects_non_string(self):
-        self.settings.write_text(json.dumps({"bare_dir": 5}))
-        with self.assertRaises(config.ConfigError):
-            bare.show(path=self.settings)
-
-    def test_set_refuses_missing_dir_unless_create(self):
-        with self.assertRaises(ValueError):
-            bare.set_dir(str(self.tmp / "nope"), path=self.settings)
-        self.assertFalse(self.settings.exists())
-        out = bare.set_dir(str(self.tmp / "nope"), create=True, path=self.settings)
-        self.assertTrue(Path(out).is_dir())
-
-    def test_set_never_overwrites_malformed_settings(self):
-        self.settings.write_text("{not json")
-        with self.assertRaises(config.ConfigError):
-            bare.set_dir(str(self.tmp), path=self.settings)
-        self.assertEqual(self.settings.read_text(), "{not json")
 
     def test_list_returns_bare_children_with_remote_and_default_branch(self):
         make_remote(self.tmp / "remote")
@@ -120,8 +90,8 @@ class BareTests(unittest.TestCase):
         make_remote(self.tmp / "remote")
         (self.tmp / "b").mkdir()
         out = bare.clone(str(self.tmp / "b"), url=str(self.tmp / "remote"), name="api")
-        dest = self.tmp / "b" / "api"
-        self.assertEqual(out, {"name": "api", "path": str(dest), "default_branch": "main"})
+        dest = self.tmp / "b" / "api.git"
+        self.assertEqual(out, {"name": "api.git", "path": str(dest), "default_branch": "main"})
         self.assertTrue(bare.is_bare(dest))
         self.assertEqual(git(dest, "config", "--get", "remote.origin.fetch"),
                          "+refs/heads/*:refs/remotes/origin/*")
@@ -131,7 +101,7 @@ class BareTests(unittest.TestCase):
 
     def test_clone_refuses_existing_target_and_bad_args(self):
         make_remote(self.tmp / "remote")
-        (self.tmp / "b" / "api").mkdir(parents=True)
+        (self.tmp / "b" / "api.git").mkdir(parents=True)
         with self.assertRaises(ValueError):
             bare.clone(str(self.tmp / "b"), url=str(self.tmp / "remote"), name="api")
         with self.assertRaises(ValueError):
@@ -152,7 +122,7 @@ class BareTests(unittest.TestCase):
             out = bare.clone(str(self.tmp / "b"), repo="acme/api")
         self.assertEqual(run.call_args_list[0].args[0][:4], ["gh", "repo", "clone", "acme/api"])
         self.assertEqual(run.call_args_list[0].args[0][-2:], ["--", "--bare"])
-        self.assertEqual(out["name"], "api")
+        self.assertEqual(out["name"], "api.git")
         self.assertEqual(out["default_branch"], "main")
 
     def _two_clones(self):
@@ -165,11 +135,11 @@ class BareTests(unittest.TestCase):
         make_remote(self.tmp / "remote")
         (self.tmp / "b").mkdir()
         bare.clone(str(self.tmp / "b"), url=str(self.tmp / "remote"), name="api")
-        dest = self.tmp / "b" / "api"
+        dest = self.tmp / "b" / "api.git"
         old = git(dest, "rev-parse", "main")
         commit_file(self.tmp / "remote", "b.txt", "b\n", "second")
         new = git(self.tmp / "remote", "rev-parse", "main")
-        [r] = bare.refresh(str(self.tmp / "b"), ["api"])
+        [r] = bare.refresh(str(self.tmp / "b"), ["api.git"])
         self.assertEqual((r["ok"], r["error"]), (True, None))
         self.assertEqual(r["advanced"],
                          [{"ref": "refs/remotes/origin/main", "from": old, "to": new}])
@@ -180,25 +150,25 @@ class BareTests(unittest.TestCase):
         (self.tmp / "b").mkdir()
         bare.clone(str(self.tmp / "b"), url=str(self.tmp / "remote"), name="api")
         git(self.tmp / "remote", "branch", "feat")
-        [r] = bare.refresh(str(self.tmp / "b"), ["api"])
+        [r] = bare.refresh(str(self.tmp / "b"), ["api.git"])
         sha = git(self.tmp / "remote", "rev-parse", "feat")
         self.assertEqual(r["advanced"],
                          [{"ref": "refs/remotes/origin/feat", "from": None, "to": sha}])
         git(self.tmp / "remote", "branch", "-D", "feat")
-        [r] = bare.refresh(str(self.tmp / "b"), ["api"])
+        [r] = bare.refresh(str(self.tmp / "b"), ["api.git"])
         self.assertEqual(r["advanced"],
                          [{"ref": "refs/remotes/origin/feat", "from": sha, "to": None}])
 
     def test_refresh_all_when_names_is_none(self):
         self._two_clones()
         out = bare.refresh(str(self.tmp / "b"))
-        self.assertEqual([r["name"] for r in out], ["api", "web"])
+        self.assertEqual([r["name"] for r in out], ["api.git", "web.git"])
         self.assertTrue(all(r["ok"] and r["advanced"] == [] for r in out))
 
     def test_refresh_reports_failure_and_continues(self):
         self._two_clones()
-        git(self.tmp / "b" / "web", "remote", "set-url", "origin", str(self.tmp / "nowhere"))
-        out = bare.refresh(str(self.tmp / "b"), ["api", "web", "nope"])
+        git(self.tmp / "b" / "web.git", "remote", "set-url", "origin", str(self.tmp / "nowhere"))
+        out = bare.refresh(str(self.tmp / "b"), ["api.git", "web.git", "nope"])
         self.assertEqual([r["ok"] for r in out], [True, False, False])
         self.assertTrue(out[1]["error"])
         self.assertIn("no bare clone named nope", out[2]["error"])
@@ -229,99 +199,55 @@ class BareTests(unittest.TestCase):
         self.assertEqual((r["ok"], r["advanced"]), (False, []))
         self.assertIn("not a single path component", r["error"])
 
-    def test_cli_refresh_exits_1_on_any_failure(self):
-        self._two_clones()
-        with mock.patch.object(bare, "SETTINGS", self.settings):
-            self.assertEqual(bare.main(["refresh"]), 1)  # bare_dir unset
-            bare.set_dir(str(self.tmp / "b"), path=self.settings)
-            self.assertEqual(bare.main(["refresh"]), 0)
-            self.assertEqual(bare.main(["refresh", "--name", "api", "--name", "nope"]), 1)
+    def _project(self):
+        from kinetic import project
+        proj = project.create(self.tmp, "proj")
+        return Path(proj), project.bare_dir(Path(proj))
 
-    def test_cli_clone_by_url_and_requires_bare_dir(self):
+    def _in(self, d, argv):
+        old = os.getcwd()
+        os.chdir(d)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return bare.main(argv)
+        finally:
+            os.chdir(old)
+
+    def test_clone_into_project_bare_repos(self):
         make_remote(self.tmp / "remote")
-        (self.tmp / "b").mkdir()
-        with mock.patch.object(bare, "SETTINGS", self.settings):
-            self.assertEqual(bare.main(["clone", "--url", str(self.tmp / "remote"),
-                                        "--name", "api"]), 1)  # bare_dir unset
-            bare.set_dir(str(self.tmp / "b"), path=self.settings)
-            self.assertEqual(bare.main(["clone", "--url", str(self.tmp / "remote"),
-                                        "--name", "api"]), 0)
-            self.assertTrue(bare.is_bare(self.tmp / "b" / "api"))
-            self.assertEqual(bare.main(["clone", "--url", str(self.tmp / "remote"),
-                                        "--name", "api"]), 1)  # exists
+        proj, bd = self._project()
+        self.assertEqual(self._in(proj, ["clone", "--url", str(self.tmp / "remote"),
+                                         "--name", "api"]), 0)
+        self.assertTrue(bare.is_bare(bd / "api.git"))
+        self.assertEqual(self._in(proj, ["clone", "--url", str(self.tmp / "remote"),
+                                         "--name", "api"]), 1)  # exists
+        self.assertEqual(self._in(proj, ["refresh", "--name", "api.git"]), 0)
+        self.assertEqual(self._in(proj, ["refresh", "--name", "nope"]), 1)
+        self.assertEqual(self._in(proj, ["list"]), 0)
 
-    def test_detect_keeps_hint_when_scan_fills_the_cap(self):
-        make_remote(self.tmp / "remote")
-        for i in range(6):
-            make_bare(self.tmp / "remote", self.home / "workspace" / f"c{i}" / "r")
-        hinted = self.tmp / "hinted"
-        hinted.mkdir()
-        (self.home / ".claude").mkdir()
-        (self.home / ".claude" / "bare-repos.local.md").write_text(
-            f"---\nbare_repos_dir: {hinted}\n---\n")
-        out = bare.detect(str(self.tmp), path=self.settings, home=self.home)
-        paths = [c["path"] for c in out["candidates"]]
-        self.assertIn(str(hinted), paths)
-        self.assertLessEqual(len(paths), 5)
-        self.assertEqual(out["recommendation"]["path"], str(self.home / "workspace" / "c0"))
+    def test_create_calls_gh_then_clones(self):
+        calls = []
+        with mock.patch.object(bare, "_run", side_effect=lambda argv: calls.append(argv) or ""), \
+                mock.patch.object(bare, "clone", return_value={"name": "n.git"}) as cl:
+            out = bare.create(str(self.tmp), "o", "n", "private")
+        self.assertEqual(calls, [["gh", "repo", "create", "o/n", "--private", "--add-readme"]])
+        cl.assert_called_once_with(str(self.tmp), repo="o/n")
+        self.assertEqual(out, {"name": "n.git"})
 
-    def test_detect_precedence(self):
-        scanned = self.home / "workspace" / "master" / ".bare"
-        make_remote(self.tmp / "remote")
-        make_bare(self.tmp / "remote", scanned / "one")
-        make_bare(self.tmp / "remote", scanned / "two")
-        hinted = self.tmp / "hinted"
-        hinted.mkdir()
-        (self.home / ".claude").mkdir()
-        (self.home / ".claude" / "bare-repos.local.md").write_text(
-            f"---\nbare_repos_dir: {hinted}\n---\n\n# x\n")
-        container = self.tmp / "other"
-        make_bare(self.tmp / "remote", container / "x")
-        worktree = self.tmp / "wt"
-        git(container / "x", "worktree", "add", str(worktree), "main")
+    def test_create_rejects_bad_visibility(self):
+        with mock.patch.object(bare, "_run") as run:
+            with self.assertRaises(ValueError):
+                bare.create(str(self.tmp), "o", "n", "secret")
+        run.assert_not_called()
 
-        out = bare.detect(str(self.tmp), path=self.settings, home=self.home)
-        self.assertIsNone(out["saved"])
-        self.assertEqual(out["recommendation"]["path"], str(scanned))
-        self.assertIn(str(hinted), [c["path"] for c in out["candidates"]])
+    def test_gh_ready_false_without_gh(self):
+        with mock.patch.dict(os.environ, {"PATH": ""}):
+            self.assertFalse(bare.gh_ready())
 
-        out = bare.detect(str(worktree), path=self.settings, home=self.home)
-        self.assertEqual(out["recommendation"]["path"], str(container))
+    def test_cli_outside_project_exit_2(self):
+        for argv in (["list"], ["refresh"], ["clone", "--url", "x", "--name", "y"]):
+            self.assertEqual(self._in(self.tmp, argv), 2)
 
-        bare.set_dir(str(hinted), path=self.settings)
-        out = bare.detect(str(worktree), path=self.settings, home=self.home)
-        self.assertEqual(out["saved"], str(hinted))
-        self.assertEqual(out["recommendation"], {"path": str(hinted), "reason": "already saved"})
-
-    def test_detect_falls_back_to_local_md_hint(self):
-        hinted = self.tmp / "hinted"
-        hinted.mkdir()
-        (self.home / ".claude").mkdir()
-        (self.home / ".claude" / "bare-repos.local.md").write_text(
-            f"---\nbare_repos_dir: {hinted}\n---\n")
-        out = bare.detect(str(self.tmp), path=self.settings, home=self.home)
-        self.assertEqual(out["recommendation"]["path"], str(hinted))
-        self.assertEqual(out["candidates"][0]["source"], "~/.claude/bare-repos.local.md")
-
-    def test_detect_nothing_found(self):
-        out = bare.detect(str(self.tmp), path=self.settings, home=self.home)
-        self.assertEqual((out["candidates"], out["recommendation"]), ([], None))
-
-    def test_cli_show_exits_1_when_unset(self):
-        with mock.patch.object(bare, "SETTINGS", self.settings):
-            self.assertEqual(bare.main(["show"]), 1)
-
-    def test_cli_set_show_list(self):
-        d = self.tmp / "bares"
-        d.mkdir()
-        with mock.patch.object(bare, "SETTINGS", self.settings):
-            self.assertEqual(bare.main(["set", "--dir", str(d)]), 0)
-            self.assertEqual(bare.main(["show"]), 0)
-            self.assertEqual(bare.main(["list"]), 0)
-
-    def test_cli_list_exits_1_when_unset(self):
-        with mock.patch.object(bare, "SETTINGS", self.settings):
-            self.assertEqual(bare.main(["list"]), 1)
 
 
 if __name__ == "__main__":

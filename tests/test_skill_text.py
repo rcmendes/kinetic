@@ -18,7 +18,7 @@ CONCRETE_MODEL = re.compile(r"\b(sonnet|opus|haiku|gpt-[\w.-]+|claude-[\w.-]+)\b
 
 # The user-only skills carry both invocation keys; no other skill may
 # carry triggers: (doctor keeps only disable-model-invocation, per rulings).
-USER_ONLY_SKILLS = ("ask", "bare-clone", "bare-refresh", "bare-setup", "catalog-setup", "cleanup",
+USER_ONLY_SKILLS = ("ask", "bare-clone", "bare-refresh", "catalog-setup", "cleanup",
                     "implement", "init", "run", "status")
 
 # Spec model tiers: implementer and fix-reviewer are standard; the reviewers and

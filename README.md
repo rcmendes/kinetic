@@ -399,7 +399,6 @@ Ship fills one template for every PR. The default is `templates/pr-body.md`. To 
 | `/kinetic:status [run-dir]` | Phase, tickets, frontier and gates of a run (the active one by default) |
 | `/kinetic:ask` | The lanes and the next step `next_step` computes for the active run |
 | `/kinetic:cleanup [run-dir]` | Removes the run's local worktrees and branches whose work is merged, after one confirmation |
-| `/kinetic:bare-setup [folder]` | Detects and saves the folder that holds your bare clones |
 | `/kinetic:bare-clone <org>/<name> ... \| <url> <name>` | Makes bare clones in that folder |
 | `/kinetic:bare-refresh [repo ...]` | Fetches into the bare clones and reports what advanced |
 | `/kinetic:catalog-setup [folder]` | Detects and saves the repo catalog folder |
@@ -413,7 +412,6 @@ Ship fills one template for every PR. The default is `templates/pr-body.md`. To 
 | `implement` | command | sonnet | `run --from build` |
 | `init`, `doctor`, `status`, `ask` | commands | sonnet, haiku, haiku, haiku | Setup and read-only views |
 | `cleanup` | command | sonnet | Removes merged worktrees and branches of a run |
-| `bare-setup` | command | sonnet | Detects, asks and saves the bare-clones folder (`bare_dir`) |
 | `bare-clone` | command | sonnet | Bare-clones `<org>/<name>` or a URL into that folder |
 | `bare-refresh` | command | sonnet | Fetches into the bare clones; local branches never move |
 | `catalog-setup` | command | sonnet | Detects, asks and saves the catalog folder (`catalog_dir`) |
@@ -475,14 +473,11 @@ A repo-root `.kinetic.json` with the same keys overrides the central entry key b
   "workspace_root": "~/workspace/kinetic-runs",
   "repo_roots": ["/Users/me/code"],
   "github_orgs": ["acme"],
-  "bare_dir": "/Users/me/workspace/master/.bare",
   "catalog_dir": "/Users/me/code/team-docs/repo-catalog"
 }
 ```
 
 `repo_roots` (folders whose child repos discovery may scan) and `github_orgs` (orgs discovery may search) are written by the discover phase when you approve them, and offered as defaults on the next run. Missing keys mean none.
-
-`bare_dir` is the folder that holds your bare clones, one per subfolder; `/kinetic:bare-setup` writes it. Unset means no change in behavior. Once saved, `discover` uses it as a source and fetches the clones that match its repos (saving it is consent for those fetches), and a run's worktrees of those clones are cut from `origin/<base>`.
 
 `catalog_dir` is the repo catalog folder; `/kinetic:catalog-setup` writes it. Unset means no catalog anywhere. It holds `index.md` (generated), `terms.md` (the controlled vocabulary), `repos/<repo>.md` (domain terms per repo, with the deliverables behind each), `recipes/<slug>.md` (one kind of change, its parameters, and per repo what it is needed for, with a strength: always, usually, sometimes or seen once) and `ledger.json` (deliverables already cataloged). `/kinetic:catalog-refresh` fills it through `kinetic catalog apply` after you approve each recipe; `discover` reads it as its first source. Put it inside a git checkout to share it with a team; kinetic never commits it.
 
