@@ -7,13 +7,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from kinetic import config, state
+from kinetic import config, project, state
 
 
-def run(run_dir, ticket_id, repo_name: str, repo_path, central=None) -> dict:
+def run(run_dir, ticket_id, repo_name: str, repo_path, project_config: Path) -> dict:
     """Run the repo's verify command, log combined output, record result in state."""
     repo_path = Path(repo_path)
-    cfg = config.resolve(repo_name, repo_path, Path(central) if central else config.DEFAULT_CENTRAL)
+    cfg = config.resolve(repo_name, repo_path, Path(project_config))
     if not repo_path.is_dir():
         raise OSError(f"repo path is not a directory: {repo_path}")
     logs = Path(run_dir) / "logs"
@@ -37,8 +37,8 @@ def main(argv=None) -> int:
     p.add_argument("--ticket", default=None)
     a = p.parse_args(argv)
     try:
-        res = run(Path(a.run), a.ticket, a.repo_name, Path(a.repo_path))
-    except (config.ConfigError, OSError) as e:
+        res = run(Path(a.run), a.ticket, a.repo_name, Path(a.repo_path), project.config_path(a.run))
+    except (config.ConfigError, OSError, project.NoProject) as e:
         print(str(e), file=sys.stderr)
         return 2
     print(json.dumps(res))

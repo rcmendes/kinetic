@@ -281,17 +281,17 @@ class PinTests(unittest.TestCase):
         state.set_ticket(self.run_dir, "T1", repo="up", status="done")
         state.set_ticket(self.run_dir, "T3", repo="up")  # todo
         state.set_ticket(self.run_dir, "T2", repo="down")
-        self.central = root / "repos.json"
+        self.project_config = root / "config.json"
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def write_central(self, up, down):
-        self.central.write_text(json.dumps({"up": up, "down": down}))
+        self.project_config.write_text(json.dumps({"repos": {"up": up, "down": down}}))
 
     def test_pin_skips_without_commands(self):
         self.write_central({"verify": "true"}, {"verify": "true", "pin": "touch ran"})
-        res = gitops.pin(self.run_dir, "up", "down", central=self.central)
+        res = gitops.pin(self.run_dir, "up", "down", project_config=self.project_config)
         self.assertFalse(res["ok"])
         self.assertIsNone(res["log_path"])
         self.assertIn("publish_snapshot", res["reason"])
@@ -302,7 +302,7 @@ class PinTests(unittest.TestCase):
         self.write_central(
             {"verify": "true", "publish_snapshot": "touch published"},
             {"verify": "true", "pin": "printenv KINETIC_UPSTREAM_REF > ref.txt"})
-        res = gitops.pin(self.run_dir, "up", "down", central=self.central)
+        res = gitops.pin(self.run_dir, "up", "down", project_config=self.project_config)
         self.assertTrue(res["ok"])
         self.assertTrue(Path(res["log_path"]).is_file())
         self.assertTrue((self.up / "published").exists())
@@ -319,18 +319,18 @@ class PinTests(unittest.TestCase):
         self.write_central({"verify": "true", "publish_snapshot": "touch published"},
                            {"verify": "true", "pin": "true"})
         with self.assertRaises(RuntimeError):
-            gitops.pin(self.run_dir, "up", "down", central=self.central)
+            gitops.pin(self.run_dir, "up", "down", project_config=self.project_config)
         self.assertFalse((plain / "published").exists())
         self.assertFalse(state.load(self.run_dir)["tickets"]["T1"]["snapshot_published"])
 
     def test_pin_unregistered_repo(self):
         with self.assertRaises(ValueError):
-            gitops.pin(self.run_dir, "up", "ghost", central=self.central)
+            gitops.pin(self.run_dir, "up", "ghost", project_config=self.project_config)
 
     def test_pin_failure_does_not_mark(self):
         self.write_central({"verify": "true", "publish_snapshot": "true"},
                            {"verify": "true", "pin": "exit 3"})
-        res = gitops.pin(self.run_dir, "up", "down", central=self.central)
+        res = gitops.pin(self.run_dir, "up", "down", project_config=self.project_config)
         self.assertFalse(res["ok"])
         self.assertTrue(Path(res["log_path"]).is_file())
         self.assertFalse(state.load(self.run_dir)["tickets"]["T1"]["snapshot_published"])

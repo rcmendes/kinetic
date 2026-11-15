@@ -9,7 +9,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from kinetic import config, state
+from kinetic import config, project, state
 
 
 PUBLISHABLE = ("done", "done_with_concerns", "merged", "released")
@@ -126,15 +126,14 @@ def merge_order(st: dict) -> list:
     return order
 
 
-def pin(run_dir, upstream_repo: str, downstream_repo: str, central=None) -> dict:
+def pin(run_dir, upstream_repo: str, downstream_repo: str, project_config: Path) -> dict:
     repos = state.load(run_dir)["repos"]
     for name in (upstream_repo, downstream_repo):
         if name not in repos:
             raise ValueError(f"repo '{name}' not registered in state")
     up_path, down_path = Path(repos[upstream_repo]["path"]), Path(repos[downstream_repo]["path"])
-    central = central or config.DEFAULT_CENTRAL
-    publish = config.resolve(upstream_repo, up_path, central)["publish_snapshot"]
-    pin_cmd = config.resolve(downstream_repo, down_path, central)["pin"]
+    publish = config.resolve(upstream_repo, up_path, project_config)["publish_snapshot"]
+    pin_cmd = config.resolve(downstream_repo, down_path, project_config)["pin"]
     for name, cmd, key in ((upstream_repo, publish, "publish_snapshot"), (downstream_repo, pin_cmd, "pin")):
         if not cmd:
             return {"ok": False, "log_path": None, "reason": f"{key} command is unset for repo '{name}'"}
@@ -204,8 +203,11 @@ def main(argv=None) -> int:
             out = assert_unchanged(Path(a.repo), a.head, a.status_hash)
             rc = 0 if out["ok"] else 1
         else:
-            out = pin(a.run, a.upstream, a.downstream)
+            out = pin(a.run, a.upstream, a.downstream, project.config_path(a.run))
             rc = 0 if out["ok"] else 1
+    except project.NoProject as e:
+        print(str(e), file=sys.stderr)
+        return 2
     except (ValueError, OSError, KeyError, RuntimeError, config.ConfigError) as e:
         print(str(e), file=sys.stderr)
         return 1

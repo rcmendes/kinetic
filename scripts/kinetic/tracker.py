@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
+from kinetic import project
 from kinetic.config import ConfigError, _load
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_SETTINGS = Path.home() / ".config/kinetic/settings.json"
 
 TRACKERS = ("jira", "github", "linear", "local", "orbit", "other")
 ROLES = (
@@ -80,7 +81,7 @@ def _settings(path: Path) -> dict:
         raise TrackerError(str(e))
 
 
-def resolve(settings: Path = DEFAULT_SETTINGS, plugin_root: Path = ROOT) -> dict:
+def resolve(settings: Path, plugin_root: Path = ROOT) -> dict:
     cfg = _settings(settings)
     tracker = cfg.get("tracker") or "local"
     if tracker not in TRACKERS:
@@ -108,7 +109,7 @@ def resolve(settings: Path = DEFAULT_SETTINGS, plugin_root: Path = ROOT) -> dict
     }
 
 
-def pr_template(repo_path: Path | None, settings: Path = DEFAULT_SETTINGS,
+def pr_template(repo_path: Path | None, settings: Path,
                 plugin_root: Path = ROOT) -> str:
     """First of: repo .kinetic.json, settings.json, plugin default. Relative paths resolve
     against the directory of the config file that set them."""
@@ -137,14 +138,17 @@ def main(argv=None) -> int:
     p = sub.add_parser("pr-template")
     p.add_argument("--repo")
     a = ap.parse_args(argv)
+    found = project.find()
+    # Outside a project the config file is absent, so every setting defaults (tracker: local).
+    settings = found / ".kinetic" / "config.json" if found else Path(os.devnull)
     try:
         if a.cmd == "resolve":
-            out = resolve()
+            out = resolve(settings)
         elif a.cmd == "store-record":
             from kinetic import ticket_store
-            out = ticket_store.for_tracker(resolve(settings=DEFAULT_SETTINGS)["tracker"])
+            out = ticket_store.for_tracker(resolve(settings)["tracker"])
         else:
-            out = {"path": pr_template(Path(a.repo) if a.repo else None)}
+            out = {"path": pr_template(Path(a.repo) if a.repo else None, settings)}
     except TrackerError as e:
         print(str(e), file=sys.stderr)
         return 1

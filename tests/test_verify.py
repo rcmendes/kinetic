@@ -3,12 +3,11 @@ from __future__ import annotations
 import contextlib
 import io
 import json
-from unittest import mock
 import tempfile
 import unittest
 from pathlib import Path
 
-from kinetic import state, verify
+from kinetic import project, state, verify
 from kinetic.config import ConfigError
 
 
@@ -17,11 +16,12 @@ class VerifyTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.tmp = Path(tmp.name)
-        self.run_dir = self.tmp / "run"
+        self.project = project.create(self.tmp, "proj")
+        self.central = self.project / ".kinetic" / "config.json"
+        self.run_dir = project.run_dir(self.project, "r1")
         state.init(self.run_dir, "quick", "X-1")
         self.repo = self.tmp / "svc"
         self.repo.mkdir()
-        self.central = self.tmp / "repos.json"
 
     def _verify_cmd(self, cmd):
         (self.repo / ".kinetic.json").write_text(json.dumps({"verify": cmd}))
@@ -69,14 +69,14 @@ class VerifyTest(unittest.TestCase):
 
     def test_missing_repo_path_leaves_no_log(self):
         gone = self.tmp / "gone"
-        (self.central).write_text(json.dumps({"svc": {"verify": "true"}}))
+        project.update(self.project, {"repos": {"svc": {"verify": "true"}}})
         with self.assertRaises(OSError):
             verify.run(self.run_dir, None, "svc", gone, self.central)
         self.assertFalse((self.run_dir / "logs").exists())
 
     def _main(self, *args):
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch("kinetic.config.DEFAULT_CENTRAL", self.central), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = verify.main(["--run", str(self.run_dir), "--repo-name", "svc",
                                 "--repo-path", str(args[0])] + list(args[1:]))
         return code, out.getvalue(), err.getvalue()
@@ -92,8 +92,21 @@ class VerifyTest(unittest.TestCase):
         self.assertEqual((code, out), (2, ""))
         self.assertIn("no verify command for repo 'svc'", err)
 
+    def test_main_resolves_project_from_run_dir_not_cwd(self):
+        project.update(self.project, {"repos": {"svc": {"verify": "exit 4"}}})
+        code, out, _ = self._main(self.repo)
+        self.assertEqual((code, json.loads(out)["exit_code"]), (4, 4))
+
+    def test_main_outside_project_exits_2(self):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = verify.main(["--run", str(self.tmp), "--repo-name", "svc",
+                                "--repo-path", str(self.repo)])
+        self.assertEqual((code, out.getvalue()), (2, ""))
+        self.assertIn("no kinetic project", err.getvalue())
+
     def test_main_missing_repo_path_exits_2(self):
-        self.central.write_text(json.dumps({"svc": {"verify": "true"}}))
+        project.update(self.project, {"repos": {"svc": {"verify": "true"}}})
         code, out, err = self._main(self.tmp / "gone")
         self.assertEqual((code, out), (2, ""))
         self.assertIn("not a directory", err)

@@ -201,19 +201,15 @@ class OrbitTicketStore:
     # -- configuration resolved on first use, then kept in state.json --
     def _names(self) -> dict:
         if not self.config.get("names"):
-            from kinetic import tracker
-            self.config["names"] = tracker.resolve(settings=tracker.DEFAULT_SETTINGS)["names"]
+            from kinetic import project, tracker
+            self.config["names"] = tracker.resolve(settings=project.config_path())["names"]
         return self.config["names"]
 
     def _anchor(self, st: dict) -> str:
         if not self.config.get("anchor"):
-            from kinetic import tracker
-            settings = tracker.resolve(settings=tracker.DEFAULT_SETTINGS)["settings"]
-            repos = [r.get("path") for r in (st.get("repos") or {}).values() if r.get("path")]
-            anchor = settings.get("orbit_dir") or (repos[0] if repos else None)
-            if not anchor:
-                raise OrbitStoreError("BOARD_NOT_FOUND", "no Orbit Board for this run yet",
-                                      "set tracker_settings.orbit_dir or register a repo first")
+            from kinetic import project, tracker
+            settings = tracker.resolve(settings=project.config_path())["settings"]
+            anchor = settings.get("orbit_dir") or project.require()
             self.config["anchor"] = str(Path(anchor).expanduser())
         return self.config["anchor"]
 
@@ -396,7 +392,7 @@ class OrbitTicketStore:
             return {"name": name, "status": status, "fix": fix}
 
         resolved = tracker.resolve(settings=settings)
-        anchor = Path(resolved["settings"].get("orbit_dir") or Path.cwd()).expanduser()
+        anchor = Path(resolved["settings"].get("orbit_dir") or Path(settings).parent.parent).expanduser()
         hold = resolved["names"]["hold"]
         install = "install orbit with Batches and Annotations (0.11.0 or later)"
         later = "fix orbit-binary first"

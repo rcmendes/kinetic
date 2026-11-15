@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from kinetic import config, discover
+from kinetic import config, discover, project
 
 
 def _git_init(path: Path, remote: str | None = None) -> None:
@@ -31,9 +31,10 @@ class DiscoverTest(unittest.TestCase):
         (self.root / "notes").mkdir()
         _git_init(self.root / "group" / "deep")
         (self.tmp / "api-link").symlink_to(self.root / "api")
-        self.repos_json = self.tmp / "repos.json"
-        self.repos_json.write_text(json.dumps(
-            {"backend": {"path": str(self.tmp / "api-link"), "verify": "make test"}}))
+        self.project = project.create(self.tmp, "proj")
+        project.update(self.project, {"tracker": "jira", "repos": {
+            "backend": {"path": str(self.tmp / "api-link"), "verify": "make test"}}})
+        self.repos_json = self.project / ".kinetic" / "config.json"
 
     # settings / remember
 
@@ -76,14 +77,14 @@ class DiscoverTest(unittest.TestCase):
     # scan
 
     def test_scan_folder_of_repos_one_level_only(self):
-        names = sorted(r["name"] for r in discover.scan([str(self.root)], central=self.repos_json))
+        names = sorted(r["name"] for r in discover.scan([str(self.root)], project_config=self.repos_json))
         self.assertEqual(names, ["api", "web"])
 
     def test_scan_root_inside_a_repo_returns_its_top_level(self):
         (self.root / "api" / "src").mkdir()
-        out = discover.scan([str(self.root / "api" / "src")], central=self.repos_json, enclosing=True)
+        out = discover.scan([str(self.root / "api" / "src")], project_config=self.repos_json, enclosing=True)
         self.assertEqual([(r["name"], r["path"]) for r in out], [("api", str(self.root / "api"))])
-        self.assertEqual(discover.scan([str(self.root / "api" / "src")], central=self.repos_json), [])
+        self.assertEqual(discover.scan([str(self.root / "api" / "src")], project_config=self.repos_json), [])
 
     def _commit_and_clone_bare(self, dest: Path) -> None:
         src = self.root / "api"
@@ -96,7 +97,7 @@ class DiscoverTest(unittest.TestCase):
 
     def test_scan_lists_bare_child_with_bare_flag(self):
         self._commit_and_clone_bare(self.root / "svc.git")
-        items = {i["name"]: i for i in discover.scan([str(self.root)], central=self.repos_json)}
+        items = {i["name"]: i for i in discover.scan([str(self.root)], project_config=self.repos_json)}
         self.assertTrue(items["svc.git"]["bare"])
         self.assertFalse(items["web"]["bare"])
         self.assertEqual(items["svc.git"]["remote"], str(self.root / "api"))
@@ -104,17 +105,17 @@ class DiscoverTest(unittest.TestCase):
     def test_scan_root_that_is_a_bare_repo(self):
         bare_root = self.tmp / "solo.git"
         self._commit_and_clone_bare(bare_root)
-        out = discover.scan([str(bare_root)], central=self.repos_json)
+        out = discover.scan([str(bare_root)], project_config=self.repos_json)
         self.assertEqual([i["path"] for i in out], [str(bare_root)])
         self.assertTrue(out[0]["bare"])
 
     def test_scan_reports_remote(self):
-        out = {r["name"]: r for r in discover.scan([str(self.root)], central=self.repos_json)}
+        out = {r["name"]: r for r in discover.scan([str(self.root)], project_config=self.repos_json)}
         self.assertEqual(out["api"]["remote"], "git@github.com:acme/api.git")
         self.assertIsNone(out["web"]["remote"])
 
     def test_scan_marks_registered_by_real_path(self):
-        out = {r["name"]: r for r in discover.scan([str(self.root)], central=self.repos_json)}
+        out = {r["name"]: r for r in discover.scan([str(self.root)], project_config=self.repos_json)}
         self.assertEqual((out["api"]["registered"], out["api"]["registered_as"]), (True, "backend"))
         self.assertEqual((out["web"]["registered"], out["web"]["registered_as"]), (False, None))
 
@@ -124,18 +125,18 @@ class DiscoverTest(unittest.TestCase):
         _git_init(locked)
         locked.chmod(0o000)
         self.addCleanup(locked.chmod, 0o755)
-        out = discover.scan([str(self.tmp / "missing"), str(self.root)], central=self.repos_json)
+        out = discover.scan([str(self.tmp / "missing"), str(self.root)], project_config=self.repos_json)
         self.assertEqual(sorted(r["name"] for r in out), ["api", "web"])
 
     def test_scan_root_inside_an_enclosing_repo_lists_children(self):
         # a dotfiles repo at the parent must not hide the checkouts under the root
         _git_init(self.tmp)
-        names = sorted(r["name"] for r in discover.scan([str(self.root)], central=self.repos_json))
+        names = sorted(r["name"] for r in discover.scan([str(self.root)], project_config=self.repos_json))
         self.assertEqual(names, ["api", "web"])
 
     def test_scan_enclosing_returns_top_level_from_a_subdir(self):
         (self.root / "api" / "src").mkdir()
-        out = discover.scan([str(self.root / "api" / "src")], central=self.repos_json, enclosing=True)
+        out = discover.scan([str(self.root / "api" / "src")], project_config=self.repos_json, enclosing=True)
         self.assertEqual([r["name"] for r in out], ["api"])
 
     def test_non_list_settings_values_are_rejected(self):
@@ -158,31 +159,39 @@ class DiscoverTest(unittest.TestCase):
 
     def test_register_adds_entry_and_keeps_others(self):
         entry = discover.register("web", str(self.root / "web"), "npm test", pin="./pin.sh",
-                                  central=self.repos_json)
-        self.assertEqual(entry, {"path": str(self.root / "web"), "verify": "npm test", "pin": "./pin.sh"})
+                                  setup="npm ci", verify_ticket="npm run t",
+                                  project_config=self.repos_json)
+        self.assertEqual(entry, {"path": str(self.root / "web"), "verify": "npm test",
+                                 "verify_ticket": "npm run t", "setup": "npm ci", "pin": "./pin.sh"})
         data = json.loads(self.repos_json.read_text())
-        self.assertEqual(sorted(data), ["backend", "web"])
+        self.assertEqual(sorted(data["repos"]), ["backend", "web"])
+
+    def test_register_writes_project_config_keeps_other_keys(self):
+        discover.register("web", str(self.root / "web"), "npm test", project_config=self.repos_json)
+        data = json.loads(self.repos_json.read_text())
+        self.assertEqual((data["version"], data["tracker"]), (1, "jira"))
+        self.assertIn("web", data["repos"])
 
     def test_register_refuses_empty_verify(self):
         with self.assertRaises(ValueError):
-            discover.register("web", str(self.root / "web"), "  ", central=self.repos_json)
-        self.assertNotIn("web", json.loads(self.repos_json.read_text()))
+            discover.register("web", str(self.root / "web"), "  ", project_config=self.repos_json)
+        self.assertNotIn("web", json.loads(self.repos_json.read_text())["repos"])
 
     def test_register_refuses_name_taken_by_other_path(self):
         with self.assertRaises(ValueError):
-            discover.register("backend", str(self.root / "web"), "npm test", central=self.repos_json)
+            discover.register("backend", str(self.root / "web"), "npm test", project_config=self.repos_json)
 
     def test_register_same_name_and_path_is_noop(self):
         before = self.repos_json.read_text()
-        entry = discover.register("backend", str(self.root / "api"), "other", central=self.repos_json)
+        entry = discover.register("backend", str(self.root / "api"), "other", project_config=self.repos_json)
         self.assertEqual(entry["verify"], "make test")
         self.assertEqual(self.repos_json.read_text(), before)
 
     def test_malformed_config_is_never_overwritten(self):
         cases = (
             (self.tmp / "s.json", lambda p: discover.remember([str(self.root)], [], path=p)),
-            (self.tmp / "r.json",
-             lambda p: discover.register("web", str(self.root / "web"), "npm test", central=p)),
+            (self.repos_json,
+             lambda p: discover.register("web", str(self.root / "web"), "npm test", project_config=p)),
         )
         for f, call in cases:
             f.write_text("{not json")
@@ -201,10 +210,26 @@ class DiscoverTest(unittest.TestCase):
 
     def test_cli_register_error_exits_1(self):
         err = io.StringIO()
-        with mock.patch.object(discover, "REPOS", self.repos_json), contextlib.redirect_stderr(err):
+        with mock.patch("os.getcwd", return_value=str(self.project)), contextlib.redirect_stderr(err):
             code = discover.main(["register", "--name", "x", "--path", str(self.root), "--verify", ""])
         self.assertEqual(code, 1)
         self.assertIn("verify", err.getvalue())
+
+    def test_cli_register_passes_setup_and_verify_ticket(self):
+        with mock.patch("os.getcwd", return_value=str(self.project)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            code = discover.main(["register", "--name", "web", "--path", str(self.root / "web"),
+                                  "--verify", "v", "--setup", "s", "--verify-ticket", "vt"])
+        self.assertEqual(code, 0)
+        e = json.loads(self.repos_json.read_text())["repos"]["web"]
+        self.assertEqual((e["setup"], e["verify_ticket"]), ("s", "vt"))
+
+    def test_cli_register_without_project_exits_2(self):
+        err = io.StringIO()
+        with mock.patch("os.getcwd", return_value=str(self.tmp)), contextlib.redirect_stderr(err):
+            code = discover.main(["register", "--name", "x", "--path", str(self.root), "--verify", "v"])
+        self.assertEqual(code, 2)
+        self.assertIn("no kinetic project", err.getvalue())
 
     def test_cli_remember_uses_patched_settings(self):
         s = self.tmp / "settings.json"

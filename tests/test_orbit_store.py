@@ -143,6 +143,16 @@ class FakeOrbitTest(unittest.TestCase):
         self.call = patcher.start()
         self.addCleanup(patcher.stop)
 
+    def test_orbit_anchor_defaults_to_project(self):
+        from kinetic import project
+        proj = project.create(Path(self._tmp.name).resolve(), "proj")
+        project.update(proj, {"tracker": "orbit", "repos": {"api": {"path": "/elsewhere/api"}}})
+        store = orbit_store.OrbitTicketStore({})
+        with mock.patch("os.getcwd", return_value=str(proj)):
+            self.assertEqual(store._anchor({}), str(proj))
+            project.update(proj, {"tracker_settings": {"orbit_dir": "/board2"}})
+            self.assertEqual(orbit_store.OrbitTicketStore({})._anchor({}), "/board2")
+
     def publish_one(self, tid="orb-a.b", **fields):
         self.tasks.append(task_json(tid, ticket(repo="api", **fields)))
 
