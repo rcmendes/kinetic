@@ -512,7 +512,7 @@ With `"tracker": "local"` (or no `tracker` key) tickets are files under `<run_di
                           tickets.staged.json (tickets staged for publishing)
 ```
 
-The active run is the run of the current directory (the run folder or any worktree in it). There is no global pointer, so two runs, in one project or in two, work at once. From the project root, `kinetic project runs` lists the open runs.
+The active run is the run of the current directory (the run folder or any worktree in it), else the run this session is bound to in `<project>/.kinetic/sessions/` (written by `kinetic project use-run`). There is no global pointer, so two runs, in one project or in two, work at once. From the project root, `kinetic project runs` lists the open runs.
 
 `kinetic state load --run <run_dir>` prints the whole state: lane, phase, tickets, slices, repos, gates, rulings, verify results and the owning session.
 
@@ -528,7 +528,7 @@ The active run is the run of the current directory (the run folder or any worktr
 | `claim_run` | PostToolUse on Bash | Records the session that ran `kinetic project use-run --run <run_dir>` as the run's owner |
 | `orient` | SessionStart | Tells a new session about the active run and the next step |
 
-The run-scoped hooks (isolation, record_edit, completion_gate) act only in the session that owns the run and on calls whose working directory is inside the run directory, so other Claude sessions on the machine are unaffected. The push and deploy hooks always apply.
+The run-scoped hooks (isolation, record_edit, completion_gate) find the run from the call's working directory, else from the session's binding (in the working directory's project, or in the project the session was started in once the working directory has left it, so a `cd` elsewhere does not lift isolation). They act only in the session that owns the run and on calls whose working directory is inside the run directory, so other Claude sessions on the machine are unaffected. At a project root with no binding they never pick a run. The push and deploy hooks always apply.
 
 ## Recovery and troubleshooting
 

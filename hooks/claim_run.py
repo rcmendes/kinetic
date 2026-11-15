@@ -13,7 +13,8 @@ def _run_arg(cmd: str):
     except ValueError:
         return None
     for i in range(len(words) - 2):
-        if words[i:i + 3] == ["kinetic", "project", "use-run"]:
+        # the word may be a path (`python3 <plugin-root>/bin/kinetic project use-run`)
+        if os.path.basename(words[i]) == "kinetic" and words[i + 1:i + 3] == ["project", "use-run"]:
             rest = words[i + 3:]
             for j, w in enumerate(rest):
                 if w == "--run" and j + 1 < len(rest):

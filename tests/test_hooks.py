@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +50,8 @@ class HookCase(unittest.TestCase):
         if harness:
             argv += ["--harness", harness]
         merged = dict(os.environ, HOME=str(self.home))
+        for k in ("CLAUDE_PROJECT_DIR", "DEVIN_PROJECT_DIR"):  # the caller's own session must not leak in
+            merged.pop(k, None)
         merged.update(env or {})
         data = payload if isinstance(payload, str) else json.dumps(payload)
         p = subprocess.run(argv, input=data, capture_output=True, text=True, env=merged,
@@ -101,6 +104,24 @@ class SessionScope(HookCase):
         self.claim("../x")
         self.assertFalse((self.proj / ".kinetic" / "x").exists())
         self.assertEqual(state.load(self.run_dir).get("owner_session"), "s1")
+
+    def test_claim_run_via_plugin_bin_path(self):
+        self.activate()
+        self.claim("s1", cmd=f"python3 /opt/plugin/bin/kinetic project use-run --run {self.run_dir}")
+        self.assertEqual(self.binding("s1"), str(self.run_dir))
+
+    def test_bound_session_isolated_after_cd_out_of_project(self):
+        self.activate()
+        self.claim("s1")
+        outside = str(self.home / "elsewhere.txt")
+        env = {"CLAUDE_PROJECT_DIR": str(self.proj)}
+        out = self.hook("isolation", {"tool_name": "Write", "tool_input": {"file_path": outside},
+                                      "session_id": "s1", "cwd": str(self.home)}, env=env)
+        self.assertEqual(self.decision(out), "deny")
+        # no binding for this session: still no run picked at the project root
+        out = self.hook("isolation", {"tool_name": "Write", "tool_input": {"file_path": outside},
+                                      "session_id": "s9", "cwd": str(self.home)}, env=env)
+        self.assertIsNone(out)
 
     def test_unrelated_bash_does_not_claim(self):
         self.activate()
@@ -947,6 +968,14 @@ class RecordEditAndOrient(HookCase):
         self.assertIsNone(self.hook("orient", {}))
         self.assertIsNone(self.hook("orient", {"cwd": str(self.proj), "session_id": "s1"}))
 
+    def test_orient_names_open_runs_at_root_without_binding(self):
+        self.activate()
+        text = self.hook("orient", {"cwd": str(self.proj), "session_id": "s1"})[
+            "hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(len(text.splitlines()), 1)
+        self.assertIn("run", text)
+        self.assertIn("/kinetic:run", text)
+
     def test_orient_outside_project_offers_start(self):
         out = self.hook("orient", {"cwd": str(self.home), "session_id": "s1"})
         self.assertEqual(out["hookSpecificOutput"]["additionalContext"],
@@ -992,6 +1021,11 @@ class ActiveRunTest(HookCase):
 
     def setUp(self):
         super().setUp()
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        os.environ.pop("DEVIN_PROJECT_DIR", None)
         sys.path.insert(0, str(HOOKS))
         import _common
         self._common = _common

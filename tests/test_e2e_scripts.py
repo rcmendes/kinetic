@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -124,14 +126,11 @@ class EpicFlowTests(unittest.TestCase):
                 self.assertIn(tid, text)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class ProjectE2ETests(unittest.TestCase):
     def test_project_e2e(self):
         tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(__import__("shutil").rmtree, tmp, True)
+        self.addCleanup(shutil.rmtree, tmp, True)
         env = {"HOME": str(tmp / "home"), "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
                "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
         old = {k: os.environ.get(k) for k in env}
@@ -172,7 +171,10 @@ class ProjectE2ETests(unittest.TestCase):
         for leaked in ("repos.json", "active-run"):
             self.assertFalse((machine / leaked).exists())
         if (machine / "settings.json").exists():
-            import json
             keys = set(json.loads((machine / "settings.json").read_text()))
             self.assertFalse(keys & {"repos", "tracker", "tracker_settings", "tracker_names",
                                      "tracker_description", "pr_template"})
+
+
+if __name__ == "__main__":
+    unittest.main()

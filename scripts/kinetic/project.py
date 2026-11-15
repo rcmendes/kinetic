@@ -69,12 +69,19 @@ def update(project: Path, changes: dict) -> dict:
     return data
 
 
-def create(parent: Path, name: str) -> Path:
+def _check_name(name: str, what: str) -> None:
     if not name or name in (".", "..") or "/" in name or os.sep in name:
-        raise ValueError(f"invalid project name: {name!r}")
+        raise ValueError(f"invalid {what}: {name!r}")
+
+
+def create(parent: Path, name: str) -> Path:
+    _check_name(name, "project name")
     parent = Path(os.path.realpath(parent))
     if not parent.is_dir():
         raise ValueError(f"not a directory: {parent}")
+    outer = find(parent)
+    if outer is not None:
+        raise ValueError(f"{parent} is inside the kinetic project {outer}; pick a folder outside it")
     r = subprocess.run(["git", "-C", str(parent), "rev-parse", "--is-inside-work-tree"],
                        capture_output=True, text=True)
     if r.returncode == 0 and r.stdout.strip() == "true":
@@ -89,6 +96,7 @@ def create(parent: Path, name: str) -> Path:
 
 
 def run_dir(project: Path, run_id: str) -> Path:
+    _check_name(run_id, "run id")
     return Path(project) / "runs" / run_id
 
 

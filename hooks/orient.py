@@ -21,8 +21,16 @@ def main(inp):
     # no owner-scope check: orient every session, so a new one can resume
     run_dir = _common.run_dir_for(inp)
     if run_dir is None:
-        if _common.project is not None and _common.project.find(inp.get("cwd") or None) is None:
+        if _common.project is None:
+            return
+        proj = _common.project.find(inp.get("cwd") or None)
+        if proj is None:
             _emit(NO_PROJECT)
+        else:
+            runs = _common.project.open_runs(proj)
+            if runs:  # never pick one for the session; name them
+                _emit(_one("kinetic: open runs here: " + ", ".join(r["run_id"] for r in runs)
+                           + ". Resume one with /kinetic:run."))
         return
     from kinetic import next_step
     st = _common.state.load(run_dir)

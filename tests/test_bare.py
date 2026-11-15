@@ -108,6 +108,9 @@ class BareTests(unittest.TestCase):
             bare.clone(str(self.tmp / "b"), url=str(self.tmp / "remote"))  # no name
         with self.assertRaises(ValueError):
             bare.clone(str(self.tmp / "b"), repo="acme/api", url="x", name="api")
+        for n in (".git", "..git", "...git"):
+            with self.assertRaises(ValueError):
+                bare.clone(str(self.tmp / "b"), url=str(self.tmp / "remote"), name=n)
 
     def test_clone_failure_raises_runtime_error(self):
         (self.tmp / "b").mkdir()

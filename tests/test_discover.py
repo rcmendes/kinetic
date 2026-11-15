@@ -181,11 +181,34 @@ class DiscoverTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             discover.register("backend", str(self.root / "web"), "npm test", project_config=self.repos_json)
 
-    def test_register_same_name_and_path_is_noop(self):
+    def test_register_same_name_and_path_unchanged_is_noop(self):
         before = self.repos_json.read_text()
-        entry = discover.register("backend", str(self.root / "api"), "other", project_config=self.repos_json)
+        entry = discover.register("backend", str(self.root / "api"), "make test",
+                                  project_config=self.repos_json)
         self.assertEqual(entry["verify"], "make test")
         self.assertEqual(self.repos_json.read_text(), before)
+
+    def test_register_same_name_and_path_merges_given_fields(self):
+        discover.register("backend", str(self.root / "api"), None, setup="make deps",
+                          project_config=self.repos_json)
+        entry = discover.register("backend", str(self.root / "api"), "make check",
+                                  verify_ticket="make t", project_config=self.repos_json)
+        self.assertEqual((entry["verify"], entry["setup"], entry["verify_ticket"]),
+                         ("make check", "make deps", "make t"))
+        self.assertEqual(json.loads(self.repos_json.read_text())["repos"]["backend"], entry)
+
+    def test_register_new_repo_still_needs_verify(self):
+        with self.assertRaises(ValueError):
+            discover.register("web", str(self.root / "web"), None, project_config=self.repos_json)
+
+    def test_cli_register_updates_commands_without_verify(self):
+        with mock.patch("os.getcwd", return_value=str(self.project)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            code = discover.main(["register", "--name", "backend", "--path", str(self.root / "api"),
+                                  "--setup", "make deps"])
+        self.assertEqual(code, 0)
+        e = json.loads(self.repos_json.read_text())["repos"]["backend"]
+        self.assertEqual((e["verify"], e["setup"]), ("make test", "make deps"))
 
     def test_malformed_config_is_never_overwritten(self):
         cases = (

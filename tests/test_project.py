@@ -59,6 +59,22 @@ class ProjectTest(unittest.TestCase):
         self.assertFalse((g / "q").exists())
         self.assertEqual(list((self.tmp / "full").iterdir()), [self.tmp / "full/x"])
 
+    def test_create_refuses_parent_inside_a_project(self):
+        for parent in (self.proj, self.proj / "runs"):
+            with self.assertRaises(ValueError):
+                project.create(parent, "inner")
+            self.assertFalse((parent / "inner").exists())
+
+    def test_cli_run_dir_refuses_unsafe_id(self):
+        env = {**os.environ, "PYTHONPATH": str(ROOT / "scripts")}
+        for bad in ("../x", "a/b", "..", "."):
+            p = subprocess.run([sys.executable, "-m", "kinetic", "project", "run-dir", "--id", bad],
+                               cwd=self.proj, capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 1, bad)
+        p = subprocess.run([sys.executable, "-m", "kinetic", "project", "run-dir", "--id", "r1"],
+                           cwd=self.proj, capture_output=True, text=True, env=env)
+        self.assertEqual(json.loads(p.stdout), {"run_dir": str(self.real / "runs" / "r1")})
+
     def test_update_atomic_keeps_unknown_keys(self):
         path = self.proj / ".kinetic/config.json"
         path.write_text(json.dumps({"version": 1, "repos": {}, "extra": 7}))

@@ -67,7 +67,7 @@ def _harness_check(cfg: dict, hid: str, settings: Path) -> dict:
         return _r("harness", "warn",
                   f"harness recorded but clone is not in {settings}; run: {install}")
     # warn, not fail: a dev checkout or a not-yet-installed setup is expected
-    # to have no install record (same as missing central-config or skills).
+    # to have no install record (same as a missing project-config or skills).
     return _r("harness", "warn", f"harness not recorded in {settings}; run: {install}")
 
 

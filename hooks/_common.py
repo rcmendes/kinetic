@@ -239,9 +239,15 @@ def session_file(proj, sid):
     return Path(proj) / ".kinetic" / "sessions" / sid
 
 
+def _launch_dir():
+    """The folder the harness session was started in (Devin's normaliser only fills a missing cwd)."""
+    return os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("DEVIN_PROJECT_DIR")
+
+
 def run_dir_for(inp: dict):
     """The run this call works on: the run holding its cwd, else the run its session is
-    bound to in the cwd's project; else None (never a guess among several runs)."""
+    bound to in the cwd's project (or, once the cwd has left every project, the session's
+    launch-dir project); else None (never a guess among several runs)."""
     cwd = inp.get("cwd") or os.getcwd()
     if project is None:
         # without the package nothing resolves; fail closed only inside a kinetic folder
@@ -251,7 +257,8 @@ def run_dir_for(inp: dict):
         return None
     run = project.run_for_path(cwd)
     if run is None:
-        proj = project.find(cwd)
+        launch = _launch_dir()
+        proj = project.find(cwd) or (project.find(launch) if launch else None)
         f = session_file(proj, inp.get("session_id")) if proj else None
         try:
             bound = f.read_text().strip() if f else ""

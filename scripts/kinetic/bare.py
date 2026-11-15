@@ -82,7 +82,7 @@ def clone(bare_dir, repo=None, url=None, name=None) -> dict:
         name = repo.split("/")[1]
     elif not (url and name and not repo):
         raise ValueError("give either --repo ORG/NAME, or --url together with --name")
-    if not _valid_name(name):
+    if not _valid_name(name) or not _valid_name(_stem(name)):  # `.git` alone leaves no name
         raise ValueError(f"--name must be a single path component, got: {name}")
     name = _stem(name)
     dest = root / f"{name}.git"
@@ -117,7 +117,7 @@ def _origin_refs(clone_path) -> dict:
 
 
 def _refresh_one(bare_dir, name) -> dict:
-    if not _valid_name(name):
+    if not _valid_name(name) or not _valid_name(_stem(name)):  # `.git` alone leaves no name
         return {"name": name, "ok": False, "advanced": [],
                 "error": f"name is not a single path component: {name}"}
     name = _stem(name)

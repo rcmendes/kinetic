@@ -121,23 +121,23 @@ def scan(roots: list, project_config: Path | None = None, enclosing: bool = Fals
     return out
 
 
-def register(name: str, path: str, verify: str, publish_snapshot=None, pin=None,
+def register(name: str, path: str, verify=None, publish_snapshot=None, pin=None,
              setup=None, verify_ticket=None, *, project_config: Path) -> dict:
+    """Add a repo, or (same name and path) merge the non-empty commands given into its entry."""
     project_dir = Path(project_config).parent.parent
     repos = project.load(project_dir).get("repos") or {}  # raises on bad JSON before anything is written
-    if not (verify or "").strip():
-        raise ValueError(f"no verify command for repo '{name}'")
     real = _real(path)
-    if name in repos:
-        if _real(repos[name].get("path", "")) != real:
-            raise ValueError(f"repo '{name}' is already registered at {repos[name].get('path')}")
-        return repos[name]
-    entry = {"path": real, "verify": verify}
-    for key, value in (("verify_ticket", verify_ticket), ("setup", setup),
-                       ("publish_snapshot", publish_snapshot), ("pin", pin)):
-        if value:
-            entry[key] = value
-    project.update(project_dir, {"repos": {**repos, name: entry}})
+    old = repos.get(name)
+    if old is not None and _real(old.get("path", "")) != real:
+        raise ValueError(f"repo '{name}' is already registered at {old.get('path')}")
+    given = {k: v for k, v in (("verify", verify), ("verify_ticket", verify_ticket), ("setup", setup),
+                               ("publish_snapshot", publish_snapshot), ("pin", pin))
+             if (v or "").strip()}
+    entry = {**(old or {"path": real}), **given}
+    if not entry.get("verify"):
+        raise ValueError(f"no verify command for repo '{name}'")
+    if entry != old:
+        project.update(project_dir, {"repos": {**repos, name: entry}})
     return entry
 
 
@@ -152,8 +152,9 @@ def main(argv=None) -> int:
     sp.add_argument("--root", action="extend", nargs="+", required=True)
     sp.add_argument("--enclosing", action="store_true")
     sp = sub.add_parser("register")
-    for a in ("--name", "--path", "--verify"):
+    for a in ("--name", "--path"):
         sp.add_argument(a, required=True)
+    sp.add_argument("--verify", default=None)  # required for a new repo; optional when updating one
     sp.add_argument("--publish-snapshot", default=None)
     sp.add_argument("--pin", default=None)
     sp.add_argument("--setup", default=None)
