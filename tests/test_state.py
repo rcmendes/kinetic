@@ -210,6 +210,14 @@ class StateTest(unittest.TestCase):
         self.assertEqual(state.set_slices(self.run_dir, ["S3"])["slices"], ["S3"])
         self.assertEqual(state.load(self.run_dir)["slices"], ["S3"])
 
+    def test_spec_defaults_to_none_and_is_settable(self):
+        self.assertIsNone(state.init(self.run_dir, "epic", "E-1").get("spec"))
+        self.assertEqual(state.set_spec(self.run_dir, "spec.md")["spec"], "spec.md")
+        self.assertEqual(state.load(self.run_dir)["spec"], "spec.md")
+        for bad in ("", None, 3):
+            with self.assertRaises(ValueError):
+                state.set_spec(self.run_dir, bad)
+
     def test_set_slices_invalid(self):  # R17
         state.init(self.run_dir, "epic", "E-1")
         for bad in ("S1", ["S1", ""], ["S1", 2], [None]):
@@ -367,6 +375,12 @@ class CliTest(unittest.TestCase):
         for bad in ('"S1"', '["S1",""]', "notjson"):
             self.assertNotEqual(self.cli("set-slices", "--slices", bad).returncode, 0)
         self.assertEqual(state.load(self.run_dir)["slices"], ["S1", "S2"])
+
+    def test_set_spec_cli(self):
+        self.cli("init", "--lane", "epic", "--ref", "E")
+        self.assertEqual(self.cli("set-spec", "--ref", "PROJ-7").returncode, 0)
+        self.assertEqual(state.load(self.run_dir)["spec"], "PROJ-7")
+        self.assertNotEqual(self.cli("set-spec", "--ref", "").returncode, 0)
 
     def test_bad_edge_type_and_missing_equals_fail(self):
         self.cli("init", "--lane", "epic", "--ref", "E")

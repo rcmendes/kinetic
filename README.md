@@ -382,11 +382,12 @@ In local mode tickets are markdown files under `<run_dir>/issues/`, and `issues/
 
 - `kinetic board header --run <run_dir> --id <id>` writes a ticket file's header (Status, Type, Repo, Slice, Blocked by, After, Ships with, Related, Assignee). Comments below the header are kept. Assignee is derived (human: the user, agent: the implementer), not stored.
 - `kinetic board render --run <run_dir>` rewrites the board.
+- `kinetic trace --run <run_dir> [--id <spec|slice|ticket>] [--json]` prints spec, slices and tickets as a tree, for the local and Orbit stores alike. `specify` records the spec with `kinetic state set-spec`.
 - `kinetic board drift --run <run_dir>` lists files that disagree with state. A file written by hand shows drift until its first `header`. If you mark a human ticket done by editing its file, kinetic sees the drift and asks before applying it.
 
 ## The PR template override
 
-Ship fills one template for every PR. The default is `templates/pr-body.md`. To use your own, set `pr_template` to a file path, in the project config for every repo or in a repo-root `.kinetic.json` for one repo. The first of repo `.kinetic.json`, the project config and the plugin default wins; a relative path resolves against the directory of the file that set it, and a configured file that is missing is an error. `kinetic tracker pr-template --repo <path>` prints the path used. Placeholders are `<<TITLE_KEY>>`, `<<TICKETS>>`, `<<DESCRIPTION>>`, `<<DESIGN_DECISIONS>>`, `<<ARCHITECTURE>>`, `<<ATTENTION_POINTS>>`, `<<MANUAL_STEPS>>`, `<<SHIPS_WITH>>`, `<<RELATED_PRS>>` and `<<DEPENDS_ON>>`; the filled placeholders are kept in `<run_dir>/pr/<repo>.placeholders.md` for the backfill once all PRs exist.
+Ship fills one template for every PR. The default is `templates/pr-body.md`. To use your own, set `pr_template` to a file path, in `settings.json` for every repo or in a repo-root `.kinetic.json` for one repo. The first of repo `.kinetic.json`, `settings.json` and the plugin default wins; a relative path resolves against the directory of the file that set it, and a configured file that is missing is an error. `kinetic tracker pr-template --repo <path>` prints the path used. Placeholders are `<<TITLE_KEY>>`, `<<TICKETS>>`, `<<DESCRIPTION>>`, `<<DESIGN_DECISIONS>>`, `<<ARCHITECTURE>>`, `<<ATTENTION_POINTS>>`, `<<MANUAL_STEPS>>`, `<<SHIPS_WITH>>`, `<<RELATED_PRS>>` and `<<DEPENDS_ON>>`; the filled placeholders are kept in `<run_dir>/pr/<repo>.placeholders.md` for the backfill once all PRs exist.
 
 ## Commands
 

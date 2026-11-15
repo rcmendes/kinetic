@@ -7,7 +7,7 @@ Access: files only. No `tracker` key in settings means local. Tickets are readab
 ## Operations
 
 ### create slice parent
-Create the slice folder `<run_dir>/issues/` and its `README.md` with `kinetic board render`. The folder is the parent reference.
+Create the slice folder `<run_dir>/issues/` and its `README.md` with `kinetic board render`. The folder is the parent reference. The README shows the run's spec (`Spec:` line) once `kinetic state set-spec` has recorded it.
 
 ### create child
 Record the ticket in state (the decompose phase writes it into the run's state), then `kinetic board header` writes its file, then `kinetic board render`.

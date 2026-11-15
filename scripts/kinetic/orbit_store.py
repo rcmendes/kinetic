@@ -336,7 +336,10 @@ class OrbitTicketStore:
         run_id, names = st["run_id"], self._names(st)
         ref = self._ref(run_id, set(tickets) | set(new_slices), aliases)
         ops = [{"op": "add", "key": source_key(run_id, s), "title": ticket_text(run_dir, s)[0],
-                "type": "epic", "labels": [run_label(run_id, names)]} for s in new_slices]
+                "type": "epic", "labels": [run_label(run_id, names)],
+                # optional: Boards and runs without a recorded spec never see this Annotation
+                **({"annotations": {ANNOTATION_OWNER: {"spec": st["spec"]}}} if st.get("spec") else {})}
+               for s in new_slices]
         try:
             order = graph.topo_order(tickets)
         except ValueError:

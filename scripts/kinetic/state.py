@@ -120,7 +120,7 @@ def init(run_dir, lane: str, ref: str, force: bool = False,
     internal(run_dir).mkdir(parents=True, exist_ok=True)
     state = {
         "run_id": uuid.uuid4().hex[:12], "run_dir": str(run_dir), "lane": lane,
-        "ref": ref, "phase": "intake", "tickets": {}, "slices": [], "repos": {},
+        "ref": ref, "spec": None, "phase": "intake", "tickets": {}, "slices": [], "repos": {},
         "gates": {}, "rulings": [], "verify": {}, "last_edit_at": None,
         "ticket_store": ticket_store_record or dict(ticket_store.LOCAL),
     }
@@ -468,6 +468,13 @@ def _bool(v: str) -> bool:
     raise argparse.ArgumentTypeError(f"invalid boolean '{v}'")
 
 
+def set_spec(run_dir, ref: str) -> dict:
+    """Record where the run's spec lives (spec.md or a tracker reference) for `kinetic trace`."""
+    if not isinstance(ref, str) or not ref:
+        raise ValueError("spec ref must be a non-empty string")
+    return _mutate(run_dir, lambda s: s.update(spec=ref))
+
+
 def _parse_field(kv: str):
     k, sep, v = kv.partition("=")
     if not sep or not k:
@@ -497,6 +504,7 @@ def main(argv=None) -> int:
     cmd("set-phase", ("--phase", {"required": True}))
     cmd("load")
     cmd("set-slices", ("--slices", {"required": True, "metavar": "JSON_LIST"}))
+    cmd("set-spec", ("--ref", {"required": True}))
     cmd("set-ticket", ("--id", {"required": True}),
         ("--field", {"action": "append", "default": [], "metavar": "KEY=VALUE"}))
     cmd("human-done", ("--id", {"required": True}), ("--note", {"default": None}))
@@ -527,6 +535,8 @@ def main(argv=None) -> int:
             out = load(a.run)
         elif a.cmd == "set-slices":
             out = set_slices(a.run, json.loads(a.slices))
+        elif a.cmd == "set-spec":
+            out = set_spec(a.run, a.ref)
         elif a.cmd == "set-ticket":
             fields = dict(_parse_field(kv) for kv in a.field)
             out = set_ticket(a.run, a.id, require_verify=True, **fields)

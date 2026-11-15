@@ -13,7 +13,7 @@ After the breakdown gate, a ticket kinetic adds later (a `NEEDS_HUMAN` ticket, a
 ## Operations
 
 ### create slice parent
-Done by publishing: each slice becomes a Parent Task with type `epic`.
+Done by publishing: each slice becomes a Parent Task with type `epic`. When the run recorded a spec (`kinetic state set-spec`), the slice also carries it in its `kinetic` Annotation (`{"spec": "<ref>"}`), so `orbit show <slice>` names the spec; with no spec recorded the Annotation is not written. Orbit itself has no spec concept: nothing changes for Boards that kinetic does not use.
 
 ### create child
 Record the ticket with `kinetic state set-ticket` (it is staged); publishing makes it a SubTask of its slice's Parent Task.

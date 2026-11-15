@@ -34,6 +34,8 @@ It prints a JSON list of problems. Fix the spec and re-run until the list is emp
    - **Tracker with remote issues**: follow the adapter's "create slice parent" operation with the spec body, and note the ticket reference at the top of `<run_dir>/spec.md`.
    - **Local**: `<run_dir>/spec.md` is the published spec.
 
+   Then record where the spec lives so `kinetic trace` can walk spec, slices and tickets: `kinetic state set-spec --run <run_dir> --ref <ref>`, with `<ref>` the ticket reference from the adapter, or `spec.md` when it is local.
+
 The orchestrator then runs the spec approval gate; do not set phases or gates here.
 
 <spec-template>
