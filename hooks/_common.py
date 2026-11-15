@@ -210,6 +210,7 @@ def _norm_opencode(inp: dict) -> dict:
         ti["file_paths"] = _patch_paths(text)
     workdir = ti.get("workdir")
     if isinstance(workdir, str) and workdir:
+        out.setdefault("launch_dir", out.get("cwd"))  # the session dir, kept for the binding lookup
         out["cwd"] = abs_path(workdir, out.get("cwd"))
     # a failed call touched nothing: drop its input so post-tool hooks
     # (record_edit, claim_run) record only completed work. The plugin already
@@ -239,9 +240,12 @@ def session_file(proj, sid):
     return Path(proj) / ".kinetic" / "sessions" / sid
 
 
-def _launch_dir():
-    """The folder the harness session was started in (Devin's normaliser only fills a missing cwd)."""
-    return os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("DEVIN_PROJECT_DIR")
+def _launch_dir(inp: dict):
+    """The folder the harness session was started in: the OpenCode session dir kept by its
+    normaliser, else CLAUDE_PROJECT_DIR / DEVIN_PROJECT_DIR (Devin's normaliser only fills a
+    missing cwd). Codex sends the session cwd as cwd and never narrows it."""
+    return (inp.get("launch_dir") or os.environ.get("CLAUDE_PROJECT_DIR")
+            or os.environ.get("DEVIN_PROJECT_DIR"))
 
 
 def run_dir_for(inp: dict):
@@ -257,7 +261,7 @@ def run_dir_for(inp: dict):
         return None
     run = project.run_for_path(cwd)
     if run is None:
-        launch = _launch_dir()
+        launch = _launch_dir(inp)
         proj = project.find(cwd) or (project.find(launch) if launch else None)
         f = session_file(proj, inp.get("session_id")) if proj else None
         try:

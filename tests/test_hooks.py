@@ -1039,6 +1039,17 @@ class ActiveRunTest(HookCase):
         self.assertEqual(self.run_of(cwd=str(self.repo / "src")), str(self.run_dir))
         self.assertEqual(self.run_of(cwd=str(self.repo), session_id="s9"), str(self.run_dir))
 
+    def test_opencode_shell_workdir_outside_project_keeps_bound_run(self):
+        self.bind("s1")
+        payload = {"kinetic_event": "PreToolUse", "cwd": str(self.proj), "sessionID": "s1",
+                   "tool": "shell", "input": {"command": "ls", "workdir": str(self.home)}}
+        inp = self._common._normalize(payload, "opencode")
+        self.assertEqual(inp["cwd"], str(self.home))
+        self.assertEqual(self.run_of(**inp), str(self.run_dir))
+        # no binding for this session: still no run picked
+        inp = self._common._normalize(dict(payload, sessionID="s9"), "opencode")
+        self.assertIsNone(self.run_of(**inp))
+
     def test_active_run_from_session_binding(self):
         self.bind("s1")
         self.assertEqual(self.run_of(cwd=str(self.proj), session_id="s1"), str(self.run_dir))
