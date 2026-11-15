@@ -4,7 +4,7 @@ The only module in kinetic that knows Orbit. Tickets are SubTasks of their
 slice's Parent Task; every kinetic field lives in the Task's `kinetic`
 Annotation, which is authoritative, and the Orbit status, claim, waiting
 reason and labels are derived from it and written in the same `orbit batch`.
-Tickets not yet published are staged in <run_dir>/tickets.staged.json.
+Tickets not yet published are staged in <run_dir>/.kinetic/tickets.staged.json.
 """
 from __future__ import annotations
 
@@ -199,21 +199,28 @@ class OrbitTicketStore:
         self.config = config
 
     # -- configuration resolved on first use, then kept in state.json --
-    def _names(self) -> dict:
+    @staticmethod
+    def _project(st: dict) -> Path:
+        """The project of this run (from its run dir), else of the cwd."""
+        from kinetic import project
+        try:
+            return project.require(st.get("run_dir"))
+        except project.NoProject as e:
+            raise OrbitStoreError("BOARD_NOT_FOUND", str(e), "run from inside a kinetic project")
+
+    def _names(self, st: dict) -> dict:
         if not self.config.get("names"):
             from kinetic import tracker
-            self.config["names"] = tracker.resolve(settings=tracker.DEFAULT_SETTINGS)["names"]
+            cfg = self._project(st) / ".kinetic" / "config.json"
+            self.config["names"] = tracker.resolve(settings=cfg)["names"]
         return self.config["names"]
 
     def _anchor(self, st: dict) -> str:
         if not self.config.get("anchor"):
             from kinetic import tracker
-            settings = tracker.resolve(settings=tracker.DEFAULT_SETTINGS)["settings"]
-            repos = [r.get("path") for r in (st.get("repos") or {}).values() if r.get("path")]
-            anchor = settings.get("orbit_dir") or (repos[0] if repos else None)
-            if not anchor:
-                raise OrbitStoreError("BOARD_NOT_FOUND", "no Orbit Board for this run yet",
-                                      "set tracker_settings.orbit_dir or register a repo first")
+            proj = self._project(st)
+            settings = tracker.resolve(settings=proj / ".kinetic" / "config.json")["settings"]
+            anchor = settings.get("orbit_dir") or proj
             self.config["anchor"] = str(Path(anchor).expanduser())
         return self.config["anchor"]
 
@@ -225,7 +232,8 @@ class OrbitTicketStore:
 
     # -- staged tickets --
     def stage_path(self, run_dir) -> Path:
-        return Path(run_dir) / STAGED
+        from kinetic.state import internal
+        return internal(run_dir) / STAGED
 
     def _staged(self, run_dir) -> dict:
         p = self.stage_path(run_dir)
@@ -250,7 +258,7 @@ class OrbitTicketStore:
     def _read_published(self, st: dict) -> dict:
         if not self.config.get("anchor") and not st.get("repos"):
             return {}  # nothing published before the run has a Board
-        run_id, names = st["run_id"], self._names()
+        run_id, names = st["run_id"], self._names(st)
         data = call(self._anchor(st), ["list", "--include-closed", "--all",
                                        "--label", run_label(run_id, names)])
         tasks = data.get("tasks", [])
@@ -288,7 +296,7 @@ class OrbitTicketStore:
 
     def write(self, run_dir, st: dict, before: dict, after: dict) -> None:
         staged = self._staged(run_dir)
-        run_id, names = st["run_id"], self._names()
+        run_id, names = st["run_id"], self._names(st)
         # After the first publish, a new ticket (a NEEDS_HUMAN ticket, a review fix)
         # goes to the Board in this same Batch instead of waiting in the staged file.
         published = bool(self.config.get("published"))
@@ -325,7 +333,7 @@ class OrbitTicketStore:
     def _add_ops(self, run_dir, st: dict, tickets: dict, new_slices: list, aliases: dict):
         """`add` operations for slices and tickets not yet on the Board; returns (ops, order)."""
         from kinetic import graph
-        run_id, names = st["run_id"], self._names()
+        run_id, names = st["run_id"], self._names(st)
         ref = self._ref(run_id, set(tickets) | set(new_slices), aliases)
         ops = [{"op": "add", "key": source_key(run_id, s), "title": ticket_text(run_dir, s)[0],
                 "type": "epic", "labels": [run_label(run_id, names)]} for s in new_slices]
@@ -396,7 +404,7 @@ class OrbitTicketStore:
             return {"name": name, "status": status, "fix": fix}
 
         resolved = tracker.resolve(settings=settings)
-        anchor = Path(resolved["settings"].get("orbit_dir") or Path.cwd()).expanduser()
+        anchor = Path(resolved["settings"].get("orbit_dir") or Path(settings).parent.parent).expanduser()
         hold = resolved["names"]["hold"]
         install = "install orbit with Batches and Annotations (0.11.0 or later)"
         later = "fix orbit-binary first"

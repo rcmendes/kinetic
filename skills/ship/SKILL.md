@@ -8,7 +8,7 @@ model: sonnet
 
 Write a PR body per repo integration branch, then open the set as **draft** PRs in merge order, wiring each PR's Depends on and Related PRs. This skill never invokes another skill and never dispatches a subagent: the orchestrator follows it inline.
 
-The orchestrator passes `Run: <dir>` (the run directory, `<workspace>/<run-id>/`). Run scripts as `kinetic <module> ...`. Repo paths, integration branches and tickets are in the run state (`kinetic state load --run <dir>`, fields `repos` and `tickets`); `base_branch` comes from repo config (default `main`); `tracker` comes from `~/.config/kinetic/settings.json`.
+The orchestrator passes `Run: <dir>` (the run directory, `<project>/runs/<run-id>/`). Run scripts as `kinetic <module> ...`. Repo paths, integration branches and tickets are in the run state (`kinetic state load --run <dir>`, fields `repos` and `tickets`); `base_branch` comes from repo config (default: the clone's `default_branch` from `kinetic bare list`); `tracker` comes from the project config (`kinetic tracker resolve`), except in a run whose `rulings` hold `tracker: local for this run`: then use `trackers/local.md` for every tracker operation and ticket reference.
 
 ## Rules
 
@@ -98,7 +98,7 @@ Then the merge order with edge types (`api -> web (snapshot)`), every unverified
 
 ## PR body template
 
-Resolve the template with `kinetic tracker pr-template --repo <worktree>`. It prints `{"path": ...}`: the repo's `.kinetic.json` `pr_template`, else the `pr_template` in settings, else the plugin's `templates/pr-body.md`. A configured file that is missing is an error: show it and stop, never fall back silently. Read the file and replace each `<<NAME>>` with what fills it:
+Resolve the template with `kinetic tracker pr-template --repo <worktree>`. It prints `{"path": ...}`: the repo's `.kinetic.json` `pr_template`, else the `pr_template` in the project config, else the plugin's `templates/pr-body.md`. A configured file that is missing is an error: show it and stop, never fall back silently. Read the file and replace each `<<NAME>>` with what fills it:
 
 | Placeholder | What fills it |
 |---|---|

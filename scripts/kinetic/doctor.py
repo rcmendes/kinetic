@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from kinetic import config, harness, install, ticket_store, tracker
+from kinetic import config, harness, install, project, ticket_store, tracker
 
 SKILLS = ["resolving-merge-conflicts"]
 PLUGINS = ["superpowers", "dev-fleet"]
@@ -34,16 +34,12 @@ def _expand(spec: str, home: Path) -> Path:
     return Path(spec)
 
 
-def _central_check(central: Path) -> dict:
-    if not central.is_file():
-        return _r("central-config", "warn", f"run /kinetic:init to create {central}")
+def _project_check(project_config: Path) -> dict:
     try:
-        ok = isinstance(json.loads(central.read_text()), dict)
-    except (ValueError, OSError):
-        ok = False
-    if not ok:
-        return _r("central-config", "fail", f"fix {central}: must be a JSON object")
-    return _r("central-config", "pass")
+        project.load(project_config.parent.parent)
+    except config.ConfigError as e:
+        return _r("project-config", "fail", f"fix {project_config}: {e}")
+    return _r("project-config", "pass")
 
 
 def _resolve_harness(harness_id, settings: Path):
@@ -71,7 +67,7 @@ def _harness_check(cfg: dict, hid: str, settings: Path) -> dict:
         return _r("harness", "warn",
                   f"harness recorded but clone is not in {settings}; run: {install}")
     # warn, not fail: a dev checkout or a not-yet-installed setup is expected
-    # to have no install record (same as missing central-config or skills).
+    # to have no install record (same as a missing project-config or skills).
     return _r("harness", "warn", f"harness not recorded in {settings}; run: {install}")
 
 
@@ -582,11 +578,11 @@ def _skill_checks(home: Path, prof: dict) -> list[dict]:
 
 
 def checks(repos: list[tuple[str, str]], home: Path | None = None,
-           central: Path | None = None, settings: Path | None = None,
+           project_config: Path | None = None, settings: Path | None = None,
            harness_id: str | None = None) -> list[dict]:
-    settings = Path(settings) if settings else tracker.DEFAULT_SETTINGS
+    """Machine checks always; project checks (config, repos, tracker) only with a project_config."""
+    settings = Path(settings) if settings else harness.DEFAULT_SETTINGS
     home = Path(home) if home else Path.home()
-    central = Path(central) if central else config.DEFAULT_CENTRAL
     out = []
     gh_auth = None
     for tool in ("git", "gh"):
@@ -607,8 +603,10 @@ def checks(repos: list[tuple[str, str]], home: Path | None = None,
             code, fix = 1, f"could not run gh auth status: {e}"
         gh_auth = _r("gh-auth", "pass") if code == 0 else _r("gh-auth", "fail", fix)
         out.append(gh_auth)
-    central_res = _central_check(central)
-    out.append(central_res)
+    project_res = None
+    if project_config:
+        project_res = _project_check(Path(project_config))
+        out.append(project_res)
 
     hid, prof, h_err = _resolve_harness(harness_id, settings)
     if h_err:
@@ -621,20 +619,21 @@ def checks(repos: list[tuple[str, str]], home: Path | None = None,
         out.append(_harness_check(cfg, hid, settings))
         out.extend(_install_checks(home, hid, settings, cfg))
 
-    for name, path in repos:
-        if central_res["status"] == "fail":
-            out.append(_r(f"verify:{name}", "fail", "fix central-config first"))
+    for name, path in repos if project_config else []:
+        if project_res["status"] == "fail":
+            out.append(_r(f"verify:{name}", "fail", "fix project-config first"))
             continue
         if not Path(path).is_dir():
             out.append(_r(f"verify:{name}", "fail", f"repo path not found: {path}"))
             continue
         try:
-            config.resolve(name, Path(path), central)
+            config.resolve(name, Path(path), project_config)
             out.append(_r(f"verify:{name}", "pass"))
         except (config.ConfigError, OSError) as e:
             out.append(_r(f"verify:{name}", "fail", str(e)))
     out.extend(_skill_checks(home, prof))
-    out.extend(_tracker_checks(settings, gh_auth))
+    if project_config:
+        out.extend(_tracker_checks(Path(project_config), gh_auth))
     return out
 
 
@@ -710,9 +709,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"bad --repo {spec!r}: expected NAME=PATH", file=sys.stderr)
             return 2
         repos.append((name, path))
-    settings = tracker.DEFAULT_SETTINGS
+    settings = harness.DEFAULT_SETTINGS
     home = Path.home()
-    res = checks(repos, home=home, settings=settings, harness_id=args.harness)
+    found = project.find()
+    if found and not repos:
+        try:
+            repos = [(n, e["path"]) for n, e in (project.load(found).get("repos") or {}).items()
+                     if isinstance(e, dict) and e.get("path")]
+        except config.ConfigError:
+            pass  # the project-config check reports it
+    res = checks(repos, home=home, settings=settings, harness_id=args.harness,
+                 project_config=found / ".kinetic" / "config.json" if found else None)
     ok = all(c["status"] != "fail" for c in res)
     payload = {"checks": res, "ok": ok}
     payload.update(_observability(settings, home, args.harness))

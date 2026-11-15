@@ -2,7 +2,7 @@
 
 ## Pick the lane
 
-First collect the candidate repos you already know: repos named in the ref text, the repo the tracker issue names, and the registered repo `/kinetic:run` was started from (its path in `~/.config/kinetic/repos.json` contains the current directory). Do not ask the user for repos here; the discover phase settles them.
+First collect the candidate repos you already know: repos named in the ref text, the repo the tracker issue names, and the registered repo `/kinetic:run` was started from (the current directory is inside its bare clone, `<project>/bare-repos/<repo>.git`). Do not ask the user for repos here; the discover phase settles them.
 
 - **Repo known at intake:** pick the lane as below. Only here can the lane be `quick`.
 - **Repo not known:** record `feature` as a provisional lane and start at the grill. The discover phase sets the final lane with `kinetic state set-lane`: one repo is `feature`, two or more is `epic`. `set-lane` only moves between `feature` and `epic`.

@@ -121,7 +121,7 @@ class FakeOrbitTest(unittest.TestCase):
         self.run_dir = Path(self._tmp.name) / "run"
         record = {"kind": "orbit", "config": {"anchor": "/board", "names": NAMES}}
         state.init(self.run_dir, "feature", "ABC-1", ticket_store_record=record)
-        f = self.run_dir / "state.json"
+        f = self.run_dir / ".kinetic" / "state.json"
         raw = json.loads(f.read_text())
         raw["run_id"] = RUN
         f.write_text(json.dumps(raw))
@@ -142,6 +142,24 @@ class FakeOrbitTest(unittest.TestCase):
         patcher = mock.patch.object(orbit_store, "call", side_effect=fake)
         self.call = patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_orbit_anchor_defaults_to_project(self):
+        from kinetic import project
+        proj = project.create(Path(self._tmp.name).resolve(), "proj")
+        project.update(proj, {"tracker": "orbit", "repos": {"api": {"path": "/elsewhere/api"}}})
+        store = orbit_store.OrbitTicketStore({})
+        with mock.patch("os.getcwd", return_value=str(proj)):
+            self.assertEqual(store._anchor({}), str(proj))
+            project.update(proj, {"tracker_settings": {"orbit_dir": "/board2"}})
+            self.assertEqual(orbit_store.OrbitTicketStore({})._anchor({}), "/board2")
+
+    def test_outside_project_is_board_not_found(self):
+        store = orbit_store.OrbitTicketStore({})
+        st = {"run_dir": str(self.run_dir)}
+        for call_ in (lambda: store._names(st), lambda: store._anchor(st)):
+            with self.assertRaises(orbit_store.OrbitStoreError) as caught:
+                call_()
+            self.assertEqual(caught.exception.code, "BOARD_NOT_FOUND")
 
     def publish_one(self, tid="orb-a.b", **fields):
         self.tasks.append(task_json(tid, ticket(repo="api", **fields)))
@@ -169,24 +187,24 @@ class FakeOrbitTest(unittest.TestCase):
     def test_state_json_has_no_tickets(self):
         self.publish_one(status="todo")
         state.set_ticket(self.run_dir, "orb-a.b", status="running")
-        raw = json.loads((self.run_dir / "state.json").read_text())
+        raw = json.loads((self.run_dir / ".kinetic" / "state.json").read_text())
         self.assertEqual(raw["tickets"], {})
 
     def test_new_ticket_is_staged_not_sent(self):
         state.set_ticket(self.run_dir, "01-api-a", repo="api")
         self.assertEqual(self.batches, [])
-        staged = json.loads((self.run_dir / "tickets.staged.json").read_text())
+        staged = json.loads((self.run_dir / ".kinetic" / "tickets.staged.json").read_text())
         self.assertEqual(staged["01-api-a"]["repo"], "api")
         self.assertEqual(state.load(self.run_dir)["tickets"]["01-api-a"]["repo"], "api")
 
     def test_orbit_failure_leaves_state_json_untouched(self):
         self.publish_one(status="todo")
-        before = (self.run_dir / "state.json").read_bytes()
+        before = (self.run_dir / ".kinetic" / "state.json").read_bytes()
         self.fail = orbit_store.OrbitStoreError("BOARD_NOT_FOUND", "no board", "set orbit_dir")
         with self.assertRaises(orbit_store.OrbitStoreError) as caught:
             state.set_ticket(self.run_dir, "orb-a.b", status="running")
         self.assertIn("set orbit_dir", str(caught.exception))
-        self.assertEqual((self.run_dir / "state.json").read_bytes(), before)
+        self.assertEqual((self.run_dir / ".kinetic" / "state.json").read_bytes(), before)
 
     def test_outside_done_on_human_ticket_is_human_done(self):
         self.tasks.append(task_json("orb-h.1", ticket(kind="human", status="todo"), status="done"))
@@ -313,17 +331,17 @@ class OrbitPublishTest(unittest.TestCase):
         self.assertNotIn("**Status:**", shown["body"])
         self.assertIn("kinetic", shown["labels"])
         self.assertEqual(orbit_json(self.board, "show", b)["depends_on"], [a])
-        self.assertFalse((self.run_dir / "tickets.staged.json").exists())
+        self.assertFalse((self.run_dir / ".kinetic" / "tickets.staged.json").exists())
         self.assertFalse((self.run_dir / "issues" / "01-api-a.md").exists())
         self.assertEqual(orbit_json(self.board, "list", "--include-closed")["count"], 3)
 
     def test_publish_twice_is_safe(self):
         # A crash after Orbit committed but before kinetic saved: both files are as before.
-        staged = (self.run_dir / "tickets.staged.json").read_text()
-        saved = (self.run_dir / "state.json").read_text()
+        staged = (self.run_dir / ".kinetic" / "tickets.staged.json").read_text()
+        saved = (self.run_dir / ".kinetic" / "state.json").read_text()
         first = state.publish_tickets(self.run_dir)
-        (self.run_dir / "tickets.staged.json").write_text(staged)
-        (self.run_dir / "state.json").write_text(saved)
+        (self.run_dir / ".kinetic" / "tickets.staged.json").write_text(staged)
+        (self.run_dir / ".kinetic" / "state.json").write_text(saved)
         second = state.publish_tickets(self.run_dir)
         self.assertEqual(first, second)
         self.assertEqual(orbit_json(self.board, "list", "--include-closed")["count"], 3)
@@ -371,13 +389,13 @@ class OrbitPublishTest(unittest.TestCase):
         state.set_ticket(self.run_dir, "03-api-review-1", repo="api", slice="01-core")
         tickets = state.load(self.run_dir)["tickets"]
         self.assertEqual(len(tickets), 3)
-        self.assertFalse((self.run_dir / "tickets.staged.json").exists())
+        self.assertFalse((self.run_dir / ".kinetic" / "tickets.staged.json").exists())
         self.assertEqual(orbit_json(self.board, "list", "--include-closed")["count"], 4)
 
     def test_lost_save_after_publish_heals_on_read(self):
-        saved = (self.run_dir / "state.json").read_text()
+        saved = (self.run_dir / ".kinetic" / "state.json").read_text()
         mapping = state.publish_tickets(self.run_dir)
-        (self.run_dir / "state.json").write_text(saved)  # the save after publish was lost
+        (self.run_dir / ".kinetic" / "state.json").write_text(saved)  # the save after publish was lost
         st = state.load(self.run_dir)
         self.assertEqual(st["slices"], [mapping["01-core"]])
         a, b = mapping["01-api-a"], mapping["02-web-b"]

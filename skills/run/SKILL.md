@@ -13,7 +13,7 @@ You are the orchestrator. Only you set phases, record gates and dispatch agents.
 
 Run kinetic commands as `kinetic <module> ...` (`kinetic` is on PATH; `kinetic root` prints the clone root for reading files inside it). If `kinetic` is not found — a plugin update without `kinetic install` — use `python3 <plugin-root>/bin/kinetic` in its place (`<plugin-root>` is the directory that holds this skill's `skills/` folder), pass the same fallback to agents in their briefs, and tell the user to run `<plugin-root>/bin/kinetic install --harness claude`.
 
-Clone root: run `kinetic root` once to get the clone's absolute path. Skill, guide, agent and tracker-adapter files are named relative to it (`skills/<name>/SKILL.md`, `skills/run/guides/`, `trackers/<name>.md`, `templates/`); substitute that path as you read them. Agents run the same `kinetic <module>` commands — `kinetic` is on their PATH too. Never edit `state.json` by hand and never read code or full diffs yourself: scripts emit JSON, agents write reports, you read report headers.
+Clone root: run `kinetic root` once to get the clone's absolute path. Skill, guide, agent and tracker-adapter files are named relative to it (`skills/<name>/SKILL.md`, `skills/run/guides/`, `trackers/<name>.md`, `templates/`); substitute that path as you read them. Agents run the same `kinetic <module>` commands — `kinetic` is on their PATH too. Never edit `<run_dir>/.kinetic/state.json` by hand and never read code or full diffs yourself: scripts emit JSON, agents write reports, you read report headers.
 
 Guides (read each at the point named, under `<clone>/skills/run/guides/`):
 
@@ -25,10 +25,12 @@ Guides (read each at the point named, under `<clone>/skills/run/guides/`):
 ## 1. Preflight
 
 1. Run `kinetic harness` and tell the user which guarantees it lists as Instructed on the active harness — those hold only through skill text, so the user knows what to watch.
-2. Read `~/.config/kinetic/repos.json` and run `kinetic doctor --repo NAME=PATH` once per entry with a `path` (all in one call). Show warns with their fix (missing reused skills have fallbacks, see `build-loop.md`). Stop on any fail. If there is no repos.json, tell the user to run `/kinetic:init` and stop.
-3. Read `~/.config/kinetic/settings.json` for `workspace_root` (default `~/workspace/kinetic-runs`), then resolve the tracker once with `kinetic tracker resolve` and read the adapter file it names; every tracker operation in a run follows that adapter.
-4. If `~/.config/kinetic/active-run` exists and points at a run directory containing `state.json`, read `guides/recovery.md` and follow it instead of initialising. Never pass `--force` to `state init` unless the user explicitly asks to restart.
-5. Otherwise the run dir is `<workspace_root>/<run-id>/`, run-id = the ticket reference, or a kebab slug of the idea plus the date (`<slug>-YYYY-MM-DD`). For a spec path, slug its file name.
+2. Run `kinetic project find`. Exit 2 means there is no kinetic project here: tell the user to run `/kinetic:start` and stop. Otherwise it prints `{"project": <project>}`; the project holds `.kinetic/config.json` (repos, tracker), `bare-repos/` and `runs/`. Never edit files under `<project>/.kinetic/` with the edit tools: project config changes only through `kinetic project update` and `kinetic discover register`.
+3. Run `kinetic doctor`; inside a project it checks every repo in the project config by itself. Show warns with their fix (missing reused skills have fallbacks, see `build-loop.md`). Stop on any fail. A new project has no repos yet; the discover phase adds them.
+4. Resolve the tracker once with `kinetic tracker resolve` and read the adapter file it names; every tracker operation in a run follows that adapter. With no tracker in the project config it resolves to local; the decompose phase may set one, and then you follow the adapter it names. A run whose `rulings` hold `tracker: local for this run` (decompose records it when the run does not publish) uses `trackers/local.md` everywhere from then on: every `Tracker adapter:` line in an agent brief, every tracker operation in the build loop, review and ship, and every phase skill you follow names `<clone>/trackers/local.md` instead of the adapter `kinetic tracker resolve` prints. Tell each phase skill so when you pass it `Run:`.
+5. Find a run to resume. `kinetic project current-run` prints `{"run_dir": ...}`: a run when this session is in a run folder or one of its worktrees, else null. When it is null and the current directory is the project root (or a bare clone), `kinetic project runs` lists the open runs (`run_id`, `run_dir`, `phase`); when there are any, show them and ask whether to resume one or start a new run. A run to resume: read `guides/recovery.md` and follow it instead of initialising. Never pass `--force` to `state init` unless the user explicitly asks to restart.
+6. A run folder under `<project>/runs/` that holds `docs/notes.md` but no `.kinetic/state.json` is the one `/kinetic:start` made. When exactly one exists (or the current directory is inside it), use it: its folder name is the run-id, and you initialise it in section 2 with the grill as the entry phase. With several, list them and ask which.
+7. Otherwise pick the run-id: the ticket reference, or a kebab slug of the idea plus the date (`<slug>-YYYY-MM-DD`). For a spec path, slug its file name. The run dir is the `run_dir` that `kinetic project run-dir --id <run-id>` prints (`<project>/runs/<run-id>`). A run dir that already holds `.kinetic/state.json` is an existing run: resume it through `guides/recovery.md`.
 
 ## 2. Start
 
@@ -38,7 +40,13 @@ Read `guides/lanes.md`, pick the lane and entry phase, then:
 kinetic state init --run <run_dir> --lane <lane> --ref "<ref>" --ticket-store "$(kinetic tracker store-record)"
 ```
 
-Write the pointer: `printf '%s' <run_dir> | tee ~/.config/kinetic/active-run` (the directory `~/.config/kinetic/` already exists after init).
+Bind this session to the run, always with exactly this command:
+
+```
+kinetic project use-run --run <run_dir>
+```
+
+The hooks recognise that command and claim the run for this session; never bind it any other way. A run started from `<run_dir>` or one of its worktrees is found from the current directory; the binding covers a session working from the project root.
 
 ## 3. Phases
 
@@ -53,7 +61,7 @@ Set each with `kinetic state set-phase --run <run_dir> --phase <phase>` just bef
 | build | `guides/build-loop.md`, build loop. |
 | review | `guides/build-loop.md`, review phase. |
 | ship | Read and follow `skills/ship/SKILL.md`, run the ship gate (`gates.md`) first. Offer `dev-fleet:release` only if the user asks and the repo is k8s-hosted. |
-| retro | Read and follow `skills/retro/SKILL.md`. Then `set-phase done`. Ticket worktrees and branches were kept until now for recovery: read and follow `skills/cleanup/SKILL.md` with this run directory (it asks before removing anything). Then `rm -f ~/.config/kinetic/active-run`. |
+| retro | Read and follow `skills/retro/SKILL.md`. Then `set-phase done`. Ticket worktrees and branches were kept until now for recovery: read and follow `skills/cleanup/SKILL.md` with this run directory (it asks before removing anything). |
 
 A rejected gate returns to the previous phase skill, never forward. Deploy is hook-confirmed; git pushes and `gh pr create|merge|edit|ready` are hook-confirmed (as are Atlassian MCP writes); other `gh pr` writes (close, comment, review), `gh issue`, `gh label` and `gh api` tracker writes, and other MCP tracker writes such as Linear, are covered only by the grant. Never try to work around a hook decision.
 

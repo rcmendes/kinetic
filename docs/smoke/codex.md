@@ -119,9 +119,18 @@ until every kinetic hook is trusted.
   => re-trust).
 - Whether hook commands run through a shell (the generated commands rely on
   `python3 "<path>" --harness codex` quoting).
-- Whether Codex's `cwd` in hook payloads matches the run-scope rule often
-  enough (the normalizer trusts the payload `cwd`; there is no
-  DEVIN_PROJECT_DIR-style fallback).
+- Codex's `cwd` in hook payloads: **settled 2026-11-15 on codex-cli 0.169.0**
+  with a probe that logged every kinetic hook's stdin during `codex exec`.
+  - `cd <dir> && cmd` inside one shell call leaves the payload `cwd` at the
+    session dir.
+  - A shell call made with the tool's `workdir` reports that workdir as the
+    payload `cwd`; `tool_input` holds only `command`, and no other field
+    carries the session dir.
+  - The hook process itself always runs in the session dir. The Codex
+    normaliser keeps it as the launch dir, so a session bound to a run still
+    resolves it when a call's `workdir` is outside the project.
+  - Not yet run: this branch's hooks inside a live Codex session (the trusted
+    hooks point at the installed clone).
 
 ## Results
 

@@ -7,9 +7,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
-from kinetic import next_step, state
+from kinetic import next_step, project, state
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -22,7 +21,7 @@ class SuggestTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.run_dir = self._tmp.name
-        (Path(self.run_dir) / "reports").mkdir()
+        (Path(self.run_dir) / ".kinetic" / "reports").mkdir(parents=True)
         self.addCleanup(self._tmp.cleanup)
 
     def S(self, tickets=None, phase="build", gates=None):
@@ -45,7 +44,7 @@ class SuggestTest(unittest.TestCase):
         self.assertIn("recover A", r["reason"])
 
     def test_r3_running_with_report_is_not_stale(self):
-        (Path(self.run_dir) / "reports" / "A.md").write_text("x")
+        (Path(self.run_dir) / ".kinetic" / "reports" / "A.md").write_text("x")
         r = next_step.suggest(self.S({"A": t("r1", "running")}))
         self.assertNotIn("recover", r["reason"])
 
@@ -79,40 +78,47 @@ class SuggestTest(unittest.TestCase):
 
 
 class CliTest(unittest.TestCase):
-    def _run(self, args, home):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(os.path.realpath(self._tmp.name))
+        self.proj = project.create(self.base, "proj")
+
+    def _run(self, args, cwd):
         return subprocess.run([sys.executable, "-m", "kinetic.next_step"] + args,
-                              capture_output=True, text=True,
-                              env={**os.environ, "PYTHONPATH": str(ROOT / "scripts"),
-                                   "HOME": home})
+                              capture_output=True, text=True, cwd=str(cwd),
+                              env={**os.environ, "PYTHONPATH": str(ROOT / "scripts")})
+
+    def out(self, args, cwd):
+        r = self._run(args, cwd)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
 
     def test_cli_run_flag(self):
-        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as d:
-            state.init(d, "quick", "X-1")
-            r = self._run(["--run", d], home)
-            self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertEqual(json.loads(r.stdout)["command"], "/kinetic:status")
+        run = project.run_dir(self.proj, "r1")
+        state.init(run, "quick", "X-1")
+        self.assertEqual(self.out(["--run", str(run)], self.base)["command"], "/kinetic:status")
 
-    def test_pointer_absent_or_empty_or_dangling(self):
-        with tempfile.TemporaryDirectory() as home:
-            self.assertEqual(json.loads(self._run([], home).stdout)["command"], "/kinetic:run <ref>")
-            cfg = Path(home) / ".config" / "kinetic"
-            cfg.mkdir(parents=True)
-            (cfg / "active-run").write_text("\n")
-            self.assertEqual(json.loads(self._run([], home).stdout)["command"], "/kinetic:run <ref>")
-            (cfg / "active-run").write_text(str(Path(home) / "nowhere"))
-            self.assertEqual(json.loads(self._run([], home).stdout)["command"], "/kinetic:run <ref>")
+    def test_no_run_outside_project_or_in_empty_project(self):
+        self.assertEqual(self.out([], self.base)["command"], "/kinetic:run <ref>")
+        self.assertEqual(self.out([], self.proj)["command"], "/kinetic:run <ref>")
 
-    def test_pointer_to_run(self):
-        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as d:
-            state.init(d, "quick", "X-1")
-            cfg = Path(home) / ".config" / "kinetic"
-            cfg.mkdir(parents=True)
-            (cfg / "active-run").write_text(d + "\n")
-            self.assertEqual(json.loads(self._run([], home).stdout)["command"], "/kinetic:status")
+    def test_run_from_cwd(self):
+        run = project.run_dir(self.proj, "r1")
+        state.init(run, "quick", "X-1")
+        state.init(project.run_dir(self.proj, "r2"), "quick", "X-2")
+        (run / "worktrees" / "api").mkdir(parents=True)
+        self.assertEqual(self.out([], run / "worktrees" / "api")["command"], "/kinetic:status")
 
-    def test_active_run_path_uses_home(self):
-        with mock.patch("os.path.expanduser", return_value="/h"):
-            self.assertEqual(str(next_step.active_run_file()), "/h/.config/kinetic/active-run")
+    def test_one_open_run_from_project_root(self):
+        state.init(project.run_dir(self.proj, "r1"), "quick", "X-1")
+        self.assertEqual(self.out([], self.proj)["command"], "/kinetic:status")
+
+    def test_next_step_two_open_runs(self):
+        state.init(project.run_dir(self.proj, "r1"), "quick", "X-1")
+        state.init(project.run_dir(self.proj, "r2"), "quick", "X-2")
+        self.assertEqual(self.out([], self.proj),
+                         {"command": "/kinetic:run", "reason": "2 open runs; open one from its folder"})
 
 
 if __name__ == "__main__":

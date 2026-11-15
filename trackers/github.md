@@ -2,7 +2,7 @@
 
 Access: the `gh` CLI. Required setting: `github_repo` (`org/repo`), the one repo that holds every issue of the run, because a run spans several repos. Pass it as `--repo <github_repo>` on every call.
 
-Label rule: before any `--label` or `--add-label`, check that the label exists with `gh label list --repo <github_repo>`. When one is missing, report it and ask the user (or point to /kinetic:init); never create a label silently with `gh label create`.
+Label rule: before any `--label` or `--add-label`, check that the label exists with `gh label list --repo <github_repo>`. When one is missing, report it and ask the user (or offer to create it, on the user's yes); never create a label silently with `gh label create`.
 
 ## Operations
 

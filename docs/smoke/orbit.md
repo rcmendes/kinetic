@@ -6,11 +6,11 @@ date, `orbit --version`, and pass/fail per step at the bottom.
 
 ## Setup
 
-1. A scratch repo with a verify command, registered with `/kinetic:init`.
-2. `orbit init` in that repo; add `"kinetic"` to `non_ready_labels` in the
+1. A scratch kinetic project (`/kinetic:start`) with one repo and its verify command registered by discover.
+2. `orbit init` in the project folder (the Board anchor); add `"kinetic"` to `non_ready_labels` in the
    Board's `config.toml`.
-3. `~/.config/kinetic/settings.json`: `{"tracker": "orbit"}` (add
-   `tracker_settings.orbit_dir` if the Board is not in the repo).
+3. From the project folder: `kinetic project update --json '{"tracker": "orbit"}'`
+   (add `tracker_settings.orbit_dir` if the Board is not at the project folder).
 4. `kinetic doctor`: `orbit-binary`, `orbit-board`, `orbit-schema` and
    `orbit-hold-label` all pass.
 
@@ -18,7 +18,7 @@ date, `orbit --version`, and pass/fail per step at the bottom.
 
 5. Start a feature-lane run with two tickets, one blocked by the other.
 6. Before the breakdown gate: `orbit list --label kinetic-run-<run id>` is
-   empty and `<run_dir>/tickets.staged.json` holds both tickets.
+   empty and `<run_dir>/.kinetic/tickets.staged.json` holds both tickets.
 7. Approve the breakdown gate: `orbit tree <slice id>` shows the Parent Task
    and both SubTasks; the second depends on the first; both carry `kinetic`.
 8. When the first ticket dispatches: `orbit show <id>` is `in_progress`,

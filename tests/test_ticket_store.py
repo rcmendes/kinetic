@@ -70,7 +70,7 @@ class LocalStoreTest(unittest.TestCase):
 
     def test_state_without_ticket_store_key_loads_as_local(self):
         state.init(self.run_dir, "feature", "ABC-1")
-        f = self.run_dir / "state.json"
+        f = self.run_dir / ".kinetic" / "state.json"
         raw = json.loads(f.read_text())
         raw.pop("ticket_store")
         f.write_text(json.dumps(raw))
@@ -106,9 +106,9 @@ class LocalPublishTest(unittest.TestCase):
             state.init(run_dir, "feature", "ABC-1")
             state.set_slices(run_dir, ["01-core"])
             state.set_ticket(run_dir, "01-api-a", repo="api", slice="01-core")
-            before = json.loads((run_dir / "state.json").read_text())["tickets"]
+            before = json.loads((run_dir / ".kinetic" / "state.json").read_text())["tickets"]
             state.record_gate(run_dir, "breakdown", True)
             self.assertEqual(state.publish_tickets(run_dir), {"01-api-a": "01-api-a"})
-            after = json.loads((run_dir / "state.json").read_text())
+            after = json.loads((run_dir / ".kinetic" / "state.json").read_text())
             self.assertEqual(after["tickets"], before)
             self.assertEqual(after["slices"], ["01-core"])

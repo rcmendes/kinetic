@@ -16,7 +16,7 @@ def _git(path, *args):
 
 
 def build(root: Path) -> dict:
-    """Create real git repos `lib` and `svc` (one commit each) plus a central repos.json."""
+    """Create real git repos `lib` and `svc` (one commit each) plus a project config file."""
     out = {}
     for name in CONFIG:
         path = Path(root) / name
@@ -28,7 +28,7 @@ def build(root: Path) -> dict:
         _git(path, "add", "README")
         _git(path, "commit", "-m", "init")
         out[name] = path
-    central = Path(root) / "repos.json"
-    central.write_text(json.dumps(CONFIG))
-    out["central"] = central
+    project_config = Path(root) / "config.json"
+    project_config.write_text(json.dumps({"version": 1, "repos": CONFIG}))
+    out["project_config"] = project_config
     return out

@@ -1,5 +1,5 @@
 """Deterministic helpers for the discover phase: saved repo roots and GitHub
-orgs, listing git repos under a root, and registering a repo in repos.json.
+orgs, listing git repos under a root, and registering a repo in the project config.
 The judgment (which repos a ticket touches) lives in skills/discover."""
 from __future__ import annotations
 
@@ -10,10 +10,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from kinetic import config
+from kinetic import config, project
 
 SETTINGS = Path.home() / ".config/kinetic/settings.json"
-REPOS = config.DEFAULT_CENTRAL
 
 
 def _write(path: Path, data: dict) -> None:
@@ -81,11 +80,11 @@ def _item(path: str, registered: dict) -> dict:
             "registered": name is not None, "registered_as": name}
 
 
-def scan(roots: list, central=None, enclosing: bool = False) -> list:
+def scan(roots: list, project_config: Path | None = None, enclosing: bool = False) -> list:
     """List git repos: a root that is a repo's top level is that repo; otherwise its
     direct child repos. enclosing=True (init on the current directory) also returns
     the top level of a repo the root sits inside."""
-    entries = config._load(Path(central or REPOS))
+    entries = config._load(project_config).get("repos") or {} if project_config else {}
     registered = {_real(e["path"]): n for n, e in entries.items()
                   if isinstance(e, dict) and e.get("path")}
     from kinetic import bare  # bare imports discover at module level
@@ -122,23 +121,23 @@ def scan(roots: list, central=None, enclosing: bool = False) -> list:
     return out
 
 
-def register(name: str, path: str, verify: str, publish_snapshot=None, pin=None, central=None) -> dict:
-    central = Path(central or REPOS)
-    data = config._load(central)  # raises on bad JSON before anything is written
-    if not (verify or "").strip():
-        raise ValueError(f"no verify command for repo '{name}'")
+def register(name: str, path: str, verify=None, publish_snapshot=None, pin=None,
+             setup=None, verify_ticket=None, *, project_config: Path) -> dict:
+    """Add a repo, or (same name and path) merge the non-empty commands given into its entry."""
+    project_dir = Path(project_config).parent.parent
+    repos = project.load(project_dir).get("repos") or {}  # raises on bad JSON before anything is written
     real = _real(path)
-    if name in data:
-        if _real(data[name].get("path", "")) != real:
-            raise ValueError(f"repo '{name}' is already registered at {data[name].get('path')}")
-        return data[name]
-    entry = {"path": real, "verify": verify}
-    if publish_snapshot:
-        entry["publish_snapshot"] = publish_snapshot
-    if pin:
-        entry["pin"] = pin
-    data[name] = entry
-    _write(central, data)
+    old = repos.get(name)
+    if old is not None and _real(old.get("path", "")) != real:
+        raise ValueError(f"repo '{name}' is already registered at {old.get('path')}")
+    given = {k: v for k, v in (("verify", verify), ("verify_ticket", verify_ticket), ("setup", setup),
+                               ("publish_snapshot", publish_snapshot), ("pin", pin))
+             if (v or "").strip()}
+    entry = {**(old or {"path": real}), **given}
+    if not entry.get("verify"):
+        raise ValueError(f"no verify command for repo '{name}'")
+    if entry != old:
+        project.update(project_dir, {"repos": {**repos, name: entry}})
     return entry
 
 
@@ -153,10 +152,13 @@ def main(argv=None) -> int:
     sp.add_argument("--root", action="extend", nargs="+", required=True)
     sp.add_argument("--enclosing", action="store_true")
     sp = sub.add_parser("register")
-    for a in ("--name", "--path", "--verify"):
+    for a in ("--name", "--path"):
         sp.add_argument(a, required=True)
+    sp.add_argument("--verify", default=None)  # required for a new repo; optional when updating one
     sp.add_argument("--publish-snapshot", default=None)
     sp.add_argument("--pin", default=None)
+    sp.add_argument("--setup", default=None)
+    sp.add_argument("--verify-ticket", default=None)
     a = p.parse_args(argv)
     try:
         if a.cmd == "settings":
@@ -164,9 +166,14 @@ def main(argv=None) -> int:
         elif a.cmd == "remember":
             out = remember(a.root, a.org, SETTINGS)
         elif a.cmd == "scan":
-            out = scan(a.root, REPOS, a.enclosing)
+            found = project.find()
+            out = scan(a.root, found / ".kinetic" / "config.json" if found else None, a.enclosing)
         else:
-            out = register(a.name, a.path, a.verify, a.publish_snapshot, a.pin, REPOS)
+            out = register(a.name, a.path, a.verify, a.publish_snapshot, a.pin, a.setup,
+                           a.verify_ticket, project_config=project.config_path())
+    except project.NoProject as e:
+        print(str(e), file=sys.stderr)
+        return 2
     except (ValueError, OSError, config.ConfigError) as e:
         print(str(e), file=sys.stderr)
         return 1

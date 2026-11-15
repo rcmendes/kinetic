@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from kinetic import doctor, harness, install
+from kinetic import doctor, harness, install, project
 
 SKILLS = ["resolving-merge-conflicts"]
 PLUGINS = ["superpowers", "dev-fleet"]
@@ -25,7 +25,8 @@ class DoctorTest(unittest.TestCase):
         self.bin.mkdir()
         self.home = self.tmp / "home"
         self.home.mkdir()
-        self.central = self.tmp / "repos.json"
+        self.project = project.create(self.tmp, "proj")
+        self.central = self.project / ".kinetic" / "config.json"
         self.settings = self.tmp / "settings.json"
         self.repo = self.tmp / "svc"
         self.repo.mkdir()
@@ -54,6 +55,9 @@ class DoctorTest(unittest.TestCase):
                             self.home, self.central, settings=self.settings,
                             harness_id=harness_id)
         return {c["name"]: c for c in res}
+
+    def _write_project(self, **cfg):
+        project.update(self.project, cfg)
 
     def _write_settings(self, **cfg):
         self.settings.write_text(json.dumps(cfg))
@@ -94,8 +98,8 @@ class DoctorTest(unittest.TestCase):
 
     def _main_json(self, *argv):
         out = io.StringIO()
-        with mock.patch.object(doctor.config, "DEFAULT_CENTRAL", self.central), \
-                mock.patch.object(doctor.tracker, "DEFAULT_SETTINGS", self.settings), \
+        with mock.patch.object(doctor.harness, "DEFAULT_SETTINGS", self.settings), \
+                mock.patch("os.getcwd", return_value=str(self.project)), \
                 mock.patch.object(doctor.Path, "home", return_value=self.home), \
                 contextlib.redirect_stdout(out):
             code = doctor.main(list(argv))
@@ -154,34 +158,60 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(c["verify:svc"]["status"], "pass")
         self.assertEqual(c["verify:svc"]["fix"], "")
 
-    def test_central_config_states(self):
-        self.assertEqual(self._by_name()["central-config"]["status"], "warn")
+    def test_project_config_states(self):
+        self.assertEqual(self._by_name()["project-config"]["status"], "pass")
         self.central.write_text("{not json")
-        self.assertEqual(self._by_name()["central-config"]["status"], "fail")
+        self.assertEqual(self._by_name()["project-config"]["status"], "fail")
         self.central.write_text("[]")
-        self.assertEqual(self._by_name()["central-config"]["status"], "fail")
+        self.assertEqual(self._by_name()["project-config"]["status"], "fail")
+        self.central.write_text('{"version": 9}')
+        self.assertEqual(self._by_name()["project-config"]["status"], "fail")
         self.central.write_text("{}")
-        self.assertEqual(self._by_name()["central-config"]["status"], "pass")
+        self.assertEqual(self._by_name()["project-config"]["status"], "pass")
+
+    def test_cli_checks_project_repos_when_no_repo_flag(self):
+        self._write_project(repos={"svc": {"path": str(self.repo)}, "gone": {"path": str(self.tmp / "nope")}})
+        out = io.StringIO()
+        with mock.patch.object(doctor.harness, "DEFAULT_SETTINGS", self.settings), \
+                mock.patch.object(doctor.Path, "home", return_value=self.home), \
+                mock.patch("os.getcwd", return_value=str(self.project)), \
+                contextlib.redirect_stdout(out):
+            doctor.main([])
+        c = {x["name"]: x["status"] for x in json.loads(out.getvalue())["checks"]}
+        self.assertEqual((c["verify:svc"], c["verify:gone"]), ("pass", "fail"))
+
+    def test_doctor_outside_project_machine_only(self):
+        res = doctor.checks([("svc", str(self.repo))], self.home, None, settings=self.settings)
+        names = {c["name"] for c in res}
+        self.assertTrue({"git", "gh", "harness"} <= names)
+        self.assertFalse({n for n in names if n.startswith(("verify:", "tracker", "project-config", "pr-template"))})
+        out = io.StringIO()
+        with mock.patch.object(doctor.harness, "DEFAULT_SETTINGS", self.settings), \
+                mock.patch.object(doctor.Path, "home", return_value=self.home), \
+                mock.patch("os.getcwd", return_value=str(self.tmp)), \
+                contextlib.redirect_stdout(out):
+            doctor.main([])
+        self.assertNotIn("project-config", [c["name"] for c in json.loads(out.getvalue())["checks"]])
 
     def test_non_dict_repo_entry_fails_cleanly(self):
         (self.repo / ".kinetic.json").unlink()
-        self.central.write_text('{"svc": "x"}')
+        self.central.write_text('{"repos": {"svc": "x"}}')
         c = self._by_name()
         self.assertEqual(c["verify:svc"]["status"], "fail")
         out = io.StringIO()
-        with mock.patch.object(doctor.config, "DEFAULT_CENTRAL", self.central), \
-                mock.patch.object(doctor.tracker, "DEFAULT_SETTINGS", self.settings), \
+        with mock.patch.object(doctor.harness, "DEFAULT_SETTINGS", self.settings), \
+                mock.patch("os.getcwd", return_value=str(self.project)), \
                 mock.patch.object(doctor.Path, "home", return_value=self.home), \
                 contextlib.redirect_stdout(out):
             code = doctor.main(["--repo", f"svc={self.repo}"])
         self.assertEqual(code, 1)
         self.assertFalse(json.loads(out.getvalue())["ok"])
 
-    def test_bad_central_fails_repo_checks(self):
+    def test_bad_project_config_fails_repo_checks(self):
         self.central.write_text("{bad")
         c = self._by_name()
-        self.assertEqual(c["central-config"]["status"], "fail")
-        self.assertEqual(c["verify:svc"]["fix"], "fix central-config first")
+        self.assertEqual(c["project-config"]["status"], "fail")
+        self.assertEqual(c["verify:svc"]["fix"], "fix project-config first")
 
     def test_repo_path_missing(self):
         c = self._by_name([("svc", str(self.tmp / "nope"))])
@@ -191,8 +221,8 @@ class DoctorTest(unittest.TestCase):
     def test_cli_success_path(self):
         self.central.write_text("{}")
         out = io.StringIO()
-        with mock.patch.object(doctor.config, "DEFAULT_CENTRAL", self.central), \
-                mock.patch.object(doctor.tracker, "DEFAULT_SETTINGS", self.settings), \
+        with mock.patch.object(doctor.harness, "DEFAULT_SETTINGS", self.settings), \
+                mock.patch("os.getcwd", return_value=str(self.project)), \
                 mock.patch.object(doctor.Path, "home", return_value=self.home), \
                 contextlib.redirect_stdout(out):
             code = doctor.main(["--repo", f"svc={self.repo}"])
@@ -200,18 +230,18 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(json.loads(out.getvalue())["ok"])
 
     def test_atlassian_warns_only_for_jira(self):
-        self._write_settings(tracker="jira", jira_project="P", slice_issue_type="S",
+        self._write_project(tracker="jira", jira_project="P", slice_issue_type="S",
                              child_issue_type="C")
         c = self._by_name()
         self.assertEqual(c["atlassian-mcp"]["status"], "warn")
         self.assertEqual(c["atlassian-mcp"]["fix"], "check with /mcp")
         self.assertEqual(c["tracker-access"]["status"], "warn")
         self.assertEqual(c["tracker-access"]["fix"], "check the MCP with /mcp")
-        self._write_settings(tracker="local")
+        self._write_project(tracker="local")
         self.assertNotIn("atlassian-mcp", self._by_name())
 
     def test_doctor_tracker_fail_on_unknown(self):
-        self._write_settings(tracker="nope")
+        self._write_project(tracker="nope")
         c = self._by_name()
         self.assertEqual(c["tracker"]["status"], "fail")
         self.assertIn("unknown tracker", c["tracker"]["fix"])
@@ -225,7 +255,7 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(c["pr-template"]["status"], "pass")
 
     def test_tracker_access_github_reuses_gh_auth(self):
-        self._write_settings(tracker="github", tracker_settings={"github_repo": "o/r"})
+        self._write_project(tracker="github", tracker_settings={"github_repo": "o/r"})
         self.assertEqual(self._by_name()["tracker-access"]["status"], "pass")
         self._stub("gh", 1)
         c = self._by_name()
@@ -237,16 +267,16 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(c["tracker-access"]["fix"], "run: gh auth login")
 
     def test_doctor_pr_template_missing(self):
-        self._write_settings(pr_template="nope.md")
+        self._write_project(pr_template="nope.md")
         c = self._by_name()
         self.assertEqual(c["pr-template"]["status"], "fail")
-        self.assertIn(str(self.tmp / "nope.md"), c["pr-template"]["fix"])
+        self.assertIn(str(self.central.parent / "nope.md"), c["pr-template"]["fix"])
 
     def test_cli_exit_code_and_output(self):
         (self.repo / ".kinetic.json").unlink()
         out = io.StringIO()
-        with mock.patch.object(doctor.config, "DEFAULT_CENTRAL", self.central), \
-                mock.patch.object(doctor.tracker, "DEFAULT_SETTINGS", self.settings), \
+        with mock.patch.object(doctor.harness, "DEFAULT_SETTINGS", self.settings), \
+                mock.patch("os.getcwd", return_value=str(self.project)), \
                 mock.patch.object(doctor.Path, "home", return_value=self.home), \
                 contextlib.redirect_stdout(out):
             code = doctor.main(["--repo", f"svc={self.repo}"])
@@ -636,7 +666,7 @@ class DoctorTest(unittest.TestCase):
         c = self._by_name()
         for n in SKILLS + PLUGINS:
             self.assertEqual(c["skill:" + n]["status"], "pass", n)
-        for n in ("git", "gh", "gh-auth", "central-config", "verify:svc",
+        for n in ("git", "gh", "gh-auth", "project-config", "verify:svc",
                   "tracker", "tracker-access", "pr-template"):
             self.assertIn(n, c)
         for n in ("harness", "install-manifest", "hooks-registered",

@@ -17,7 +17,7 @@ A full review of this ticket already happened. An implementer has tried to fix i
 - `Repo: <worktree>`
 - `Findings: <run_dir>/reviews/<id>-findings-N.md` (the confirmed findings for this round, one per line with an id)
 - `Fix diff: <fix-base-sha>..<head-sha>` (fix-base is the head the previous review saw)
-- `Report: <run_dir>/reports/<id>.md` (the implementer appended a `## Fix round N` section)
+- `Report: <run_dir>/.kinetic/reports/<id>.md` (the implementer appended a `## Fix round N` section)
 - Output file: `<run_dir>/reviews/<id>-fix-N.md`
 
 ## Read-only

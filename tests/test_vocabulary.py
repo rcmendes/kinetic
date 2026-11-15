@@ -9,7 +9,6 @@ ROOT = Path(__file__).resolve().parent.parent
 SCANNED = ("scripts", "hooks", "skills", "agents", "templates")
 ALLOWED = {
     "scripts/kinetic/orbit_store.py",
-    "skills/init/SKILL.md",
 }
 # tracker.py may name it only in the tracker registry (TRACKERS and REQUIRED).
 REGISTRY = re.compile(r'^(TRACKERS = \(.*"orbit".*\)|    "orbit": \[\],)$')

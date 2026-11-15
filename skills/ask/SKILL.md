@@ -27,11 +27,11 @@ Print the following, then the next step.
 | Spec and tickets with edges | build (frontier) |
 | One small ticket, no spec | quick lane |
 
-Other commands: `/kinetic:implement <ref>` (alias for `run --from build`), `/kinetic:init`, `/kinetic:doctor`, `/kinetic:status`.
+Other commands: `/kinetic:implement <ref>` (alias for `run --from build`), `/kinetic:start` (turn a conversation into a project), `/kinetic:doctor`, `/kinetic:status`.
 
 ## Next step
 
-Run `kinetic next_step`. It uses the active run (`~/.config/kinetic/active-run`) and prints JSON `{"command", "reason"}`. Render it as exactly:
+Run `kinetic next_step`. It uses the run of the current folder, else the project's only open run, and prints JSON `{"command", "reason"}`. Render it as exactly:
 
 `Next: <command> — <reason>`
 

@@ -1,6 +1,6 @@
 ---
 name: cleanup
-description: Remove a kinetic run's local worktrees and branches whose work is merged. Uses the active run unless a run directory is given. Lists what would go and asks before removing anything; never touches unmerged work or the run directory.
+description: Remove a kinetic run's local worktrees and branches whose work is merged. Uses the run of the current folder unless a run directory is given. Lists what would go and asks before removing anything; never touches unmerged work or the run directory.
 model: sonnet
 disable-model-invocation: true
 triggers: [user]
@@ -13,13 +13,13 @@ Remove the local git worktrees and branches of one run once their work is merged
 
 ## 1. Pick the run
 
-The run directory is the argument if given, else the contents of `~/.config/kinetic/active-run`. Load it with `kinetic state load --run <run_dir>`. With no run, say so and stop.
+The run directory is the argument if given, else the run of the current directory (`kinetic project current-run` prints its `run_dir`, or null). When that is null, `kinetic project runs` lists the project's open runs: use the only one, or, with several, list them and ask which. Load it with `kinetic state load --run <run_dir>`. With no run, say so and stop.
 
 The run id in branch names is the run directory's name: branches are `kinetic/<run-id>/integration` and `kinetic/<run-id>/<ticket-id>`.
 
 ## 2. Find what is merged (no changes yet)
 
-For each repo in `state.repos` (its `path` is the integration worktree; its clone path is `path` in `~/.config/kinetic/repos.json`):
+For each repo in `state.repos` (its `path` is the integration worktree; its clone path is the repo's bare clone, `path` under `repos` in `<project>/.kinetic/config.json`, where `<project>` is what `kinetic project find` prints):
 
 - **Ticket worktrees and branches.** For each ticket of this repo with a `worktree` or `branch` in state: it is removable when its branch is merged into the integration branch. Check with `git -C <integration worktree> branch --merged kinetic/<run-id>/integration --list 'kinetic/<run-id>/*'`.
 - **The integration worktree and branch.** Removable only when the repo's PR is merged. Find the PR with `gh pr list --head kinetic/<run-id>/integration --state all --json number,state,headRefOid,url`, run from the clone path. Merged means `state` is `MERGED`. Note `headRefOid` for step 4.
@@ -43,7 +43,7 @@ Never pass `--force` to `worktree remove`: a refusal means uncommitted changes. 
 
 ## 5. Report
 
-List what was removed and what was kept, with the reason for each item kept. Never remove the run directory: it holds the state, reports, reviews and docs. Do not change `state.json`.
+List what was removed and what was kept, with the reason for each item kept. Never remove the run directory: it holds the state, reports, reviews and docs. Do not change `<run_dir>/.kinetic/state.json`.
 
 ## 6. Offer to catalog
 

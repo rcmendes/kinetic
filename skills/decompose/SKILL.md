@@ -8,11 +8,11 @@ model: sonnet
 
 Break the spec into **slices** (tracer-bullet vertical slices, each a parent ticket) and, per slice, one **child ticket per repo** it touches. The child ticket is the unit an agent implements; the slice stays the unit you demo and verify. This skill never invokes another skill.
 
-The orchestrator passes `Run: <dir>` (the run directory, `<workspace>/<run-id>/`) and the spec location. The repos in play are the run's repos: `kinetic state load --run <dir>` lists them under `repos`, each with its integration worktree path. Explore code there, not in the user's own checkouts. `<dir>/discovery.md` says why each repo is in the run.
+The orchestrator passes `Run: <dir>` (the run directory, `<project>/runs/<run-id>/`) and the spec location. The repos in play are the run's repos: `kinetic state load --run <dir>` lists them under `repos`, each with its integration worktree path. Explore code there, not in the user's own checkouts. `<dir>/discovery.md` says why each repo is in the run.
 
 Every agent ticket's repo must be one of the run's repos; `graph validate` reports any other as an error. If the slicing shows another repo is needed, stop and tell the orchestrator which repo and why: it runs discover for it and brings you back. Run scripts as `kinetic <module> ...`.
 
-Resolve the tracker with `kinetic tracker resolve` (set by `/kinetic:init`; with no tracker configured it resolves to local), read the adapter file it names, and follow its operations by name ("create slice parent", "create child", "link blocker", "link after", "link ships-with", "link related", "set kind", "assign to user", "fetch", ...). Tracker-specific names come from the resolve output: `names.kind.human`, `names.edge.<type>`, `names.after`, `names.ships_with`, `names.related`. Do not hard-code them.
+Resolve the tracker with `kinetic tracker resolve` (the project's tracker; with none configured it resolves to local), read the adapter file it names, and follow its operations by name ("create slice parent", "create child", "link blocker", "link after", "link ships-with", "link related", "set kind", "assign to user", "fetch", ...). Tracker-specific names come from the resolve output: `names.kind.human`, `names.edge.<type>`, `names.after`, `names.ships_with`, `names.related`. Do not hard-code them.
 
 ## Process
 
@@ -45,7 +45,7 @@ Beyond blockers, a child ticket may carry soft links, each only where it applies
 
 Give each child a **Type**: `agent` (an implementer can do it) or `human` (only a person can: credentials, an infra apply, manual config, a decision, a console click). Propose the type and a one-line reason for every human ticket.
 
-Use only these three edge types. A ticket with no blockers can start immediately. Use a `snapshot` edge between two repos only when the upstream repo's config has `publish_snapshot` and the downstream repo's has `pin` (read `~/.config/kinetic/repos.json` and each repo's `.kinetic.json`); without them the pin step cannot run and the downstream ticket never becomes ready, so use `merge`. Use `release` only when the downstream genuinely needs a released version: the orchestrator marks it released by hand, so say so in the ticket. Within one repo prefer `merge`.
+Use only these three edge types. A ticket with no blockers can start immediately. Use a `snapshot` edge between two repos only when the upstream repo's config has `publish_snapshot` and the downstream repo's has `pin` (read `repos` in `<project>/.kinetic/config.json` and each repo's `.kinetic.json`); without them the pin step cannot run and the downstream ticket never becomes ready, so use `merge`. Use `release` only when the downstream genuinely needs a released version: the orchestrator marks it released by hand, so say so in the ticket. Within one repo prefer `merge`.
 
 Give each agent ticket its **interfaces** (human tickets have none): what it `produces` that another ticket uses (an API endpoint, a client method, an event, a schema, a config key), and what it `consumes` from other tickets or from existing code. Use one stable name per interface across tickets, in the glossary's terms (for example `StatementClient.export` or `event:statement-exported`). A ticket that consumes what another ticket produces must be blocked by it, directly or through other tickets; `graph validate` reports it as an error otherwise.
 
@@ -62,6 +62,14 @@ Present the breakdown as a numbered list. Show a table with a `type` column, hum
 Iterate until the user approves.
 
 ### 4. Publish
+
+**Does this run publish to the tracker?** Ask the user once, before publishing anything. Without publishing, the tickets stay as files in the run folder.
+
+- **No**: follow the Local steps below and the local adapter (`trackers/local.md`) for the rest of the run. If `ticket_store` in `kinetic state load --run <dir>` is not `{"kind": "local"}`, run `kinetic state set-ticket-store --run <dir> --record '{"kind": "local"}'`. Record it: `kinetic state add-ruling --run <dir> --what "tracker: local for this run" --why "<the user's reason>" --cost "tickets live only in the run folder"`.
+- **Yes**, and `kinetic tracker resolve` names the project's tracker (`tracker` is set in `<project>/.kinetic/config.json`, `<project>` from `kinetic project find`): publish through it as below.
+- **Yes**, and the project config has no `tracker`: ask which tracker (one adapter per file under `trackers/`) and that adapter's required settings; for `other`, also a short description of the tracker and how to reach it. Write them only through `kinetic project update --json '{"tracker": "<name>", "tracker_settings": {...}}'` (add `"tracker_description"` for `other`); never edit `<project>/.kinetic/` files with the edit tools. Then `kinetic state set-ticket-store --run <dir> --record "$(kinetic tracker store-record)"` (refused once the run has tickets, so do it before recording any), re-run `kinetic tracker resolve` and follow the adapter it names from now on. With the adapter's "fetch", check that each concrete label in `names` (`names.kind.*`, `names.edge.*`) exists; list the missing ones and create them only on the user's yes.
+
+**A run whose ref is an existing tracker task** (`ref` in state is that task's reference): create each slice parent as a SubTask of that task, the adapter's "create child" with the task as parent, unless the adapter says its tracker cannot nest them there; then follow what the adapter says instead. Kinetic never claims that task, never moves its status and never closes it: its only write to it is one "comment" naming the run folder (`<dir>`).
 
 Publish in dependency order (blockers first) so edges can reference real identifiers. Do NOT close or modify the source spec issue.
 
@@ -104,7 +112,7 @@ Omit `produces` or `consumes` when the ticket has none. Add the new fields where
 
 In local mode, after writing each ticket file run `kinetic board header --run <dir> --id <ticket-id>` so its header matches state, and when all files are written `kinetic board render --run <dir>`. Do this before anything reads `board drift`: a hand-written file shows drift until its first `header`.
 
-Every slice id passed to `set-slices` must appear in at least one ticket's `slice` field. Do not edit `state.json` by hand.
+Every slice id passed to `set-slices` must appear in at least one ticket's `slice` field. Do not edit `<dir>/.kinetic/state.json` by hand.
 
 ### 6. Validate
 

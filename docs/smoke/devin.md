@@ -42,8 +42,8 @@ and which are only Instructed.
 
 ## 1. Quick-lane run end to end
 
-- `/kinetic:run "<small self-contained idea>"` in a scratch repo registered
-  with `/kinetic:init` (or an existing central config).
+- `/kinetic:run "<small self-contained idea>"` inside a scratch kinetic project
+  made with `/kinetic:start`.
 - Expect: lane picked with a one-line reason; Instructed guarantees stated
   at run start; grill questions in chat (Devin has no question tool); spec
   and breakdown gates answered in chat; implementers dispatched as

@@ -5,63 +5,72 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from kinetic import project
 from kinetic.config import ConfigError, resolve
 
 
 class ResolveTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        self.central = self.tmp / "repos.json"
+        t = tempfile.TemporaryDirectory()
+        self.addCleanup(t.cleanup)
+        self.tmp = Path(t.name).resolve()
+        self.project = project.create(self.tmp, "proj")
+        self.cfg = self.project / ".kinetic" / "config.json"
         self.repo = self.tmp / "svc"
         self.repo.mkdir()
 
-    def _central(self, data):
-        self.central.write_text(json.dumps(data))
+    def _project(self, repos):
+        project.update(self.project, {"repos": repos})
 
     def _repo(self, data):
         (self.repo / ".kinetic.json").write_text(json.dumps(data))
 
-    def test_repo_override_wins(self):
-        self._central({"svc": {"verify": "make test", "base_branch": "master"}})
-        self._repo({"verify": "mvn verify"})
-        self.assertEqual(
-            resolve("svc", self.repo, self.central),
-            {"verify": "mvn verify", "base_branch": "master", "publish_snapshot": None, "pin": None},
-        )
+    def test_resolve_reads_project_repos(self):
+        self._project({"svc": {"verify": "make test", "base_branch": "master", "pin": "p"},
+                       "other": {"verify": "nope"}})
+        r = resolve("svc", self.repo, self.cfg)
+        self.assertEqual((r["verify"], r["base_branch"], r["pin"]), ("make test", "master", "p"))
 
-    def test_default_base_branch_main(self):
-        self._central({"svc": {"verify": "make test"}})
-        self.assertEqual(resolve("svc", self.repo, self.central)["base_branch"], "main")
+    def test_resolve_new_keys_default_none(self):
+        self._project({"svc": {"verify": "make test"}})
+        r = resolve("svc", self.repo, self.cfg)
+        self.assertEqual(r, {"verify": "make test", "verify_ticket": None, "setup": None,
+                             "publish_snapshot": None, "pin": None, "base_branch": "main"})
+        self._project({"svc": {"verify": "v", "verify_ticket": "vt", "setup": "npm ci"}})
+        r = resolve("svc", self.repo, self.cfg)
+        self.assertEqual((r["verify_ticket"], r["setup"]), ("vt", "npm ci"))
+
+    def test_repo_override_wins(self):
+        self._project({"svc": {"verify": "make test", "base_branch": "master"}})
+        self._repo({"verify": "mvn verify"})
+        r = resolve("svc", self.repo, self.cfg)
+        self.assertEqual((r["verify"], r["base_branch"]), ("mvn verify", "master"))
 
     def test_missing_verify_raises(self):
         with self.assertRaises(ConfigError) as ctx:
-            resolve("svc", self.repo, self.central)
+            resolve("svc", self.repo, self.cfg)
         self.assertEqual(
             str(ctx.exception),
-            f"no verify command for repo 'svc': set it in {self.central} or {self.repo}/.kinetic.json",
+            f"no verify command for repo 'svc': set it in {self.cfg} or {self.repo}/.kinetic.json",
         )
-
-    def _raw(self, path, text):
-        path.write_text(text)
 
     def test_malformed_config_raises_config_error(self):
         repo_file = self.repo / ".kinetic.json"
         cases = [
-            (self.central, "{bad", str(self.central)),
-            (self.central, "[]", str(self.central)),
-            (self.central, '{"svc": "x"}', "svc"),
-            (self.central, '{"svc": null}', "svc"),
+            (self.cfg, "{bad", str(self.cfg)),
+            (self.cfg, "[]", str(self.cfg)),
+            (self.cfg, '{"repos": {"svc": "x"}}', "svc"),
+            (self.cfg, '{"repos": {"svc": null}}', "svc"),
             (repo_file, "{bad", str(repo_file)),
             (repo_file, "[]", str(repo_file)),
             (repo_file, '"x"', str(repo_file)),
         ]
         for path, text, needle in cases:
-            for f in (self.central, repo_file):
-                if f.exists():
-                    f.unlink()
-            self._raw(path, text)
+            self.cfg.write_text('{"version": 1, "repos": {}}')
+            repo_file.unlink(missing_ok=True)
+            path.write_text(text)
             with self.assertRaises(ConfigError, msg=text) as ctx:
-                resolve("svc", self.repo, self.central)
+                resolve("svc", self.repo, self.cfg)
             self.assertIn(needle, str(ctx.exception))
             self.assertIn(str(path), str(ctx.exception))
 

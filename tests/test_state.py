@@ -25,7 +25,7 @@ class StateTest(unittest.TestCase):
 
     def test_save_keeps_file_mode(self):
         state.init(self.run_dir, "feature", "ABC-1")
-        f = self.run_dir / "state.json"
+        f = self.run_dir / ".kinetic" / "state.json"
         f.chmod(0o640)
         state.set_phase(self.run_dir, "grill")
         self.assertEqual(f.stat().st_mode & 0o777, 0o640)
@@ -36,7 +36,7 @@ class StateTest(unittest.TestCase):
             state.init(self.run_dir, "feature", "ABC-1")
         finally:
             os.umask(old)
-        self.assertEqual((self.run_dir / "state.json").stat().st_mode & 0o777, 0o644)
+        self.assertEqual((self.run_dir / ".kinetic" / "state.json").stat().st_mode & 0o777, 0o644)
 
     def test_init_writes_schema(self):
         s = state.init(self.run_dir, "feature", "ABC-1")
@@ -255,6 +255,26 @@ class StateTest(unittest.TestCase):
         state.record_edit(self.run_dir, str(Path(self.run_dir) / "spec.md"))
         self.assertIsNone(state.load(self.run_dir)["last_edit_at"])
 
+    def test_state_files_under_internal(self):
+        state.init(self.run_dir, "epic", "E-1")
+        state.set_ticket(self.run_dir, "T1", status="todo")
+        internal = state.internal(self.run_dir)
+        self.assertEqual(internal, self.run_dir / ".kinetic")
+        self.assertTrue((internal / "state.json").is_file())
+        self.assertTrue((internal / "state.lock").is_file())
+        self.assertFalse((self.run_dir / "state.json").exists())
+        self.assertFalse((self.run_dir / "state.lock").exists())
+
+    def test_set_ticket_store_refused_with_tickets(self):
+        state.init(self.run_dir, "epic", "E-1")
+        record = {"kind": "local", "note": "x"}
+        self.assertEqual(state.set_ticket_store(self.run_dir, record)["ticket_store"], record)
+        self.assertEqual(state.load(self.run_dir)["ticket_store"], record)
+        state.set_ticket(self.run_dir, "T1", status="todo")
+        with self.assertRaises(ValueError):
+            state.set_ticket_store(self.run_dir, {"kind": "local"})
+        self.assertEqual(state.load(self.run_dir)["ticket_store"], record)
+
     def test_init_refuses_existing_unless_force(self):
         state.init(self.run_dir, "quick", "Q-1")
         with self.assertRaises(FileExistsError):
@@ -292,6 +312,15 @@ class CliTest(unittest.TestCase):
     def _ticket_in_repo(self):
         self.cli("init", "--lane", "epic", "--ref", "E")
         self.cli("set-ticket", "--id", "T1", "--field", "repo=api")
+
+    def test_cli_set_ticket_store(self):
+        self.cli("init", "--lane", "epic", "--ref", "E")
+        r = self.cli("set-ticket-store", "--record", '{"kind": "local", "note": "y"}')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(state.load(self.run_dir)["ticket_store"]["note"], "y")
+        self.cli("set-ticket", "--id", "T1", "--field", "repo=api")
+        r = self.cli("set-ticket-store", "--record", '{"kind": "local"}')
+        self.assertEqual(r.returncode, 1)
 
     def test_cli_refuses_done_without_verify(self):
         self._ticket_in_repo()
@@ -512,7 +541,7 @@ class LegacyPhaseTest(unittest.TestCase):
             run = Path(d) / "run"
             state.init(run, "epic", "X-1")
             for old, new in (("spec", "specify"), ("tickets", "decompose")):
-                f = run / "state.json"
+                f = run / ".kinetic" / "state.json"
                 f.write_text(json.dumps(dict(json.loads(f.read_text()), phase=old)))
                 self.assertEqual(state.load(run)["phase"], new)
                 state.set_ticket(run, "A", status="todo")  # any write keeps the new name

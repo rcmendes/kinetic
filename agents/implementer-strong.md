@@ -23,13 +23,13 @@ The orchestrator gives you these lines. If any is missing, report BLOCKED.
 - `Repo: <worktree>` (also gives `Repo name:` if it differs from the directory name)
 - `Ticket ref: <id>` and `Tracker adapter: <path>` (read the adapter file and follow its "fetch" operation to read the issue)
 - `Ticket file: <path>` (local mode only; read it instead of fetching)
-- `Report: <run_dir>/reports/<id>.md`
+- `Report: <run_dir>/.kinetic/reports/<id>.md`
 - `Grant: <line>`
-- `Previous report: <path>`, `Ruling: <n>`, `Answer: <text>` (extra lines a fresh dispatch or resume may carry: the earlier report to read for context; the ruling's 1-based index in `<run_dir>/state.json`'s `rulings`; or a supplied answer)
+- `Previous report: <path>`, `Ruling: <n>`, `Answer: <text>` (extra lines a fresh dispatch or resume may carry: the earlier report to read for context; the ruling's 1-based index in `<run_dir>/.kinetic/state.json`'s `rulings`; or a supplied answer)
 
 ## What you read
 
-Only: your ticket, the spec sections the ticket points to, `GLOSSARY.md` and ADRs under `Docs` and in `Repo` if present, and the code in `Repo` — plus, when a `Previous report:` or `Ruling:` line reaches you (a fresh dispatch's brief or a resume message), that report file and the `rulings` entry it names in `<run_dir>/state.json` (read-only). Tickets carry pointers, not copies; follow them rather than asking for more context.
+Only: your ticket, the spec sections the ticket points to, `GLOSSARY.md` and ADRs under `Docs` and in `Repo` if present, and the code in `Repo` — plus, when a `Previous report:` or `Ruling:` line reaches you (a fresh dispatch's brief or a resume message), that report file and the `rulings` entry it names in `<run_dir>/.kinetic/state.json` (read-only). Tickets carry pointers, not copies; follow them rather than asking for more context.
 
 ## Rules
 
@@ -52,7 +52,7 @@ Stopping early is never penalized; bad work is worse than no work. Report instea
 ## Procedure
 
 1. Read the ticket and the spec sections it points to.
-2. Work test-first per the `tdd` skill. Before writing the fix, run the new test and save its failing output to `<run_dir>/logs/<id>-red.log` (use `tee`); that is your RED evidence. Commit when green.
+2. Work test-first per the `tdd` skill. Before writing the fix, run the new test and save its failing output to `<run_dir>/.kinetic/logs/<id>-red.log` (use `tee`); that is your RED evidence. Commit when green.
 3. Self-review your own diff (`git diff` against the integration branch) before verifying, and fix what fails:
    - Completeness: every acceptance criterion is implemented and tested; edge cases the criteria imply are handled.
    - Discipline: nothing beyond the ticket; existing patterns followed; nothing restructured outside the ticket.
@@ -60,7 +60,7 @@ Stopping early is never penalized; bad work is worse than no work. Report instea
    - Names: they say what things do, in the glossary's terms.
 4. Last step, after your final edit, run verify:
 
-   `kinetic verify --run <run_dir> --repo-name <name> --repo-path <worktree> --ticket <id>`
+   `kinetic verify --run <run_dir> --repo-name <name> --repo-path <worktree> --ticket <id> --scope ticket`
 
    It prints JSON with the exit code and log path. If you edit anything after verify, re-run it: the orchestrator cannot mark the ticket done while its worktree has edits newer than its last passing verify.
 5. A non-zero verify means the status cannot be DONE. Find the root cause before changing code: read the full failure, reproduce it with the narrowest test, form one hypothesis, test it with one change, and repeat. Never stack guesses, and never weaken or delete a test to make it pass. After 3 failed hypotheses, report BLOCKED with the log path and what you ruled out.
@@ -98,7 +98,7 @@ Status: DONE
 Ticket: <id>
 Branch: <ticket branch>
 Verify: <log_path from verify output>
-TDD: <failing test name(s)>; RED <run_dir>/logs/<id>-red.log
+TDD: <failing test name(s)>; RED <run_dir>/.kinetic/logs/<id>-red.log
 Self-review: <none or what you fixed>
 Questions: <none or list>
 Concerns: <none or list>

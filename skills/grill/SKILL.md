@@ -8,9 +8,11 @@ model: sonnet
 
 Interview the user relentlessly until you reach a shared understanding, and write the domain language and key decisions down as they crystallise.
 
-The orchestrator passes `Run: <dir>` (the run directory, `<workspace>/<run-id>/`) and the ref being grilled. Run scripts as `kinetic <module> ...`. This skill never invokes another skill.
+The orchestrator passes `Run: <dir>` (the run directory, `<project>/runs/<run-id>/`) and the ref being grilled. Run scripts as `kinetic <module> ...`. This skill never invokes another skill.
 
 Write the domain docs under `<dir>/docs/`, never into a repo checkout: the isolation hook denies writes outside the run directory and registered repos, and the orchestrator points implementers at `<dir>/docs/`. Read a repo's own `GLOSSARY.md` and ADRs if it has them; when updating one, copy it into `<dir>/docs/` first and edit the copy.
+
+A run started by `/kinetic:start` already holds `<dir>/docs/notes.md` (the conversation's notes and the links it named) and `<dir>/docs/refs/` (the files it pointed at). Read them first and grill from there: do not ask again what they already settle.
 
 ## Interview rules
 

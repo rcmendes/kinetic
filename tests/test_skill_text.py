@@ -18,8 +18,19 @@ CONCRETE_MODEL = re.compile(r"\b(sonnet|opus|haiku|gpt-[\w.-]+|claude-[\w.-]+)\b
 
 # The user-only skills carry both invocation keys; no other skill may
 # carry triggers: (doctor keeps only disable-model-invocation, per rulings).
-USER_ONLY_SKILLS = ("ask", "bare-clone", "bare-refresh", "bare-setup", "catalog-setup", "cleanup",
-                    "implement", "init", "run", "status")
+USER_ONLY_SKILLS = ("ask", "bare-clone", "bare-refresh", "catalog-setup", "cleanup",
+                    "implement", "run", "status")
+
+# start replaces init; bare-setup is gone (the project holds bare-repos/).
+SKILLS = {"ask", "bare-clone", "bare-refresh", "catalog-refresh", "catalog-setup", "cleanup",
+          "decompose", "discover", "doctor", "grill", "implement", "retro", "run", "ship",
+          "specify", "start", "status", "tdd"}
+
+# Global config and bookkeeping paths the project layout replaced.
+STALE = ("~/.config/kinetic/repos.json", "repos.json", "workspace_root", "active-run", "bare_dir",
+         "kinetic bare show", "kinetic bare set", "kinetic bare detect", "/kinetic:bare-setup",
+         "/kinetic:init", "<run_dir>/reports", "<run_dir>/logs", "<run_dir>/state.json",
+         "<run_dir>/tickets.staged")
 
 # Spec model tiers: implementer and fix-reviewer are standard; the reviewers and
 # implementer-strong are strong. model: stays as the Claude/Devin default
@@ -154,12 +165,66 @@ class SkillTextTest(unittest.TestCase):
 
     def test_discover_uses_bare_folder(self):
         text = (ROOT / "skills" / "discover" / "SKILL.md").read_text()
-        for needle in ("kinetic bare show", "kinetic bare list", "kinetic bare refresh",
-                       "kinetic bare clone --repo", "not refreshed:", "default_branch",
-                       "never run it without `--name`", "counts as one match",
-                       "recheck with `kinetic bare list`"):
+        for needle in ("kinetic bare list", "kinetic bare refresh",
+                       "kinetic bare clone --repo", "kinetic bare clone --url", "not refreshed:",
+                       "default_branch", "never run it without `--name`", "counts as one match",
+                       "recheck with `kinetic bare list`", "kinetic bare gh-ready",
+                       "kinetic bare create --owner", "--verify-ticket", "--setup",
+                       "kinetic gitops setup", "owner, the name and the visibility"):
             self.assertIn(needle, text)
         self.assertNotIn("only the GitHub calls in step 4 reach the network", text)
+
+    def test_skill_set(self):
+        self.assertEqual({p.parent.name for p in (ROOT / "skills").glob("*/SKILL.md")}, SKILLS)
+
+    def test_no_stale_global_config_or_run_paths(self):
+        bad = []
+        for p in [*_text_files("skills", "agents", "trackers"), ROOT / "README.md"]:
+            text = p.read_text()
+            for needle in STALE:
+                if needle in text:
+                    bad.append("%s: %s" % (p.relative_to(ROOT), needle))
+        self.assertEqual(bad, [])
+
+    def test_start_creates_the_project_only_after_the_yes(self):
+        p = ROOT / "skills" / "start" / "SKILL.md"
+        text = p.read_text()
+        self.assertIn("kinetic project create", text)
+        self.assertLess(text.index('"Turn this into a project?"'),
+                        text.index("kinetic project create"))
+        self.assertNotIn("disable-model-invocation", _frontmatter(p))
+        for needle in ("kinetic project find", "docs/notes.md", "docs/refs/",
+                       "open a new session inside `<project>`", "cd <project> && kinetic"):
+            self.assertIn(needle, text)
+        # After creating the project start never runs the run skill in this session.
+        after = text[text.index("kinetic project create"):]
+        self.assertNotIn("skills/run/SKILL.md", after)
+        self.assertNotIn("kinetic project use-run", text)
+
+    def test_run_binds_and_recovers_through_the_project(self):
+        text = (ROOT / "skills" / "run" / "SKILL.md").read_text()
+        for needle in ("kinetic project find", "/kinetic:start", "kinetic project run-dir --id",
+                       "kinetic project use-run --run <run_dir>", "kinetic project current-run",
+                       "kinetic project runs", "docs/notes.md` but no `.kinetic/state.json`",
+                       "tracker: local for this run"):
+            self.assertIn(needle, text)
+        self.assertIn("kinetic project use-run --run <run_dir>",
+                      (ROOT / "skills" / "run" / "guides" / "recovery.md").read_text())
+
+    def test_build_loop_setup_scopes_and_report_paths(self):
+        loop = (ROOT / "skills" / "run" / "guides" / "build-loop.md").read_text()
+        for needle in ("kinetic gitops setup", "--scope full", "<run_dir>/needs-human/<id>-<N>.md",
+                       "<run_dir>/.kinetic/reports/<id>.md", "proceed without setup",
+                       "trackers/local.md"):
+            self.assertIn(needle, loop)
+        for agent in ("implementer", "implementer-strong"):
+            self.assertIn("--scope ticket", (ROOT / "agents" / f"{agent}.md").read_text())
+
+    def test_decompose_asks_whether_to_publish(self):
+        text = (ROOT / "skills" / "decompose" / "SKILL.md").read_text()
+        for needle in ("kinetic project update", "kinetic state set-ticket-store",
+                       "never claims that task"):
+            self.assertIn(needle, text)
 
     def test_discover_reads_catalog(self):
         text = (ROOT / "skills" / "discover" / "SKILL.md").read_text()
@@ -192,7 +257,3 @@ class OrbitSkillTextTest(unittest.TestCase):
     def test_run_skill_records_the_ticket_store(self):
         text = (ROOT / "skills/run/SKILL.md").read_text()
         self.assertIn('--ticket-store "$(kinetic tracker store-record)"', text)
-
-    def test_init_skill_offers_orbit(self):
-        text = (ROOT / "skills/init/SKILL.md").read_text()
-        self.assertIn("`orbit`", text)

@@ -9,9 +9,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 try:
-    from kinetic import state
+    from kinetic import project, state
 except Exception:  # PreToolUse hooks fail closed via run(); others stay silent
-    state = None
+    project = state = None
 
 # The harness this hook invocation serves, selected by --harness (default claude,
 # so existing hook commands keep working unchanged). Set by run() before fn runs.
@@ -151,8 +151,13 @@ def _norm_codex(inp: dict) -> dict:
     "Bash", file edits are "apply_patch"). apply_patch carries the raw patch
     text in tool_input.command; every file header is extracted into
     tool_input.file_paths. The list is set even when empty so fail-closed
-    hooks can tell "no paths parsed" apart from "not a patch tool"."""
+    hooks can tell "no paths parsed" apart from "not a patch tool".
+
+    A shell call made with the tool's workdir reports that workdir as cwd and
+    carries no other trace of the session dir, but Codex runs the hook process
+    in the session dir (checked on codex-cli 0.169.0), so that is the launch dir."""
     out = dict(inp)
+    out.setdefault("launch_dir", os.getcwd())
     raw_ti = inp.get("tool_input")
     ti = dict(raw_ti) if isinstance(raw_ti, dict) else {}
     name = out.get("tool_name")
@@ -210,6 +215,7 @@ def _norm_opencode(inp: dict) -> dict:
         ti["file_paths"] = _patch_paths(text)
     workdir = ti.get("workdir")
     if isinstance(workdir, str) and workdir:
+        out.setdefault("launch_dir", out.get("cwd"))  # the session dir, kept for the binding lookup
         out["cwd"] = abs_path(workdir, out.get("cwd"))
     # a failed call touched nothing: drop its input so post-tool hooks
     # (record_edit, claim_run) record only completed work. The plugin already
@@ -231,15 +237,44 @@ def _normalize(inp: dict, harness: str) -> dict:
     return normalizer(inp) if normalizer else inp
 
 
-def pointer_run_dir():
-    """The run dir the active-run pointer names, if it holds a state.json; else None."""
-    try:
-        run_dir = (Path.home() / ".config" / "kinetic" / "active-run").read_text().strip()
-    except OSError:
+def session_file(proj, sid):
+    """<project>/.kinetic/sessions/<sid>, the run this session works on; None for an unusable sid."""
+    sid = str(sid or "")
+    if not sid or sid in (".", "..") or "/" in sid or os.sep in sid or "\0" in sid:
         return None
-    if not run_dir or not os.path.isfile(os.path.join(run_dir, "state.json")):
+    return Path(proj) / ".kinetic" / "sessions" / sid
+
+
+def _launch_dir(inp: dict):
+    """The folder the harness session was started in: the session dir kept by the OpenCode
+    and Codex normalisers, else CLAUDE_PROJECT_DIR / DEVIN_PROJECT_DIR (Devin's normaliser
+    only fills a missing cwd)."""
+    return (inp.get("launch_dir") or os.environ.get("CLAUDE_PROJECT_DIR")
+            or os.environ.get("DEVIN_PROJECT_DIR"))
+
+
+def run_dir_for(inp: dict):
+    """The run this call works on: the run holding its cwd, else the run its session is
+    bound to in the cwd's project (or, once the cwd has left every project, the session's
+    launch-dir project); else None (never a guess among several runs)."""
+    cwd = inp.get("cwd") or os.getcwd()
+    if project is None:
+        # without the package nothing resolves; fail closed only inside a kinetic folder
+        p = Path(os.path.realpath(cwd))
+        if any((d / ".kinetic").is_dir() for d in (p, *p.parents)):
+            raise ImportError("kinetic package not importable")
         return None
-    return run_dir
+    run = project.run_for_path(cwd)
+    if run is None:
+        launch = _launch_dir(inp)
+        proj = project.find(cwd) or (project.find(launch) if launch else None)
+        f = session_file(proj, inp.get("session_id")) if proj else None
+        try:
+            bound = f.read_text().strip() if f else ""
+        except OSError:
+            bound = ""
+        run = project.run_for_path(bound) if bound else None
+    return str(run) if run else None
 
 
 def _in_scope(inp: dict, run_dir: str, st: dict) -> bool:
@@ -252,19 +287,19 @@ def _in_scope(inp: dict, run_dir: str, st: dict) -> bool:
 
 
 def active_run(inp=None, tickets: bool = True):
-    """Return (run_dir, state) for the active run if this hook call is in its scope, else None.
+    """Return (run_dir, state) for the active run (run_dir_for) if this hook call is in its
+    scope, else None.
 
     In scope: the session that owns the run, any call whose cwd is inside the run dir, or every
     call when no owner is recorded or the payload has no session_id. A state.json that exists but
     cannot be loaded raises so fail-closed hooks can ask.
     """
-    run_dir = pointer_run_dir()
+    inp = inp or {}
+    run_dir = run_dir_for(inp)
     if run_dir is None:
         return None
-    if state is None:
-        raise ImportError("kinetic package not importable")
     st = state.load(run_dir, tickets=tickets)
-    return (run_dir, st) if _in_scope(inp or {}, run_dir, st) else None
+    return (run_dir, st) if _in_scope(inp, run_dir, st) else None
 
 
 TOUCH_INTERVAL = 300  # seconds between liveness signals per worktree
@@ -290,11 +325,11 @@ def touch_ticket(inp) -> None:
         while root.parent != root and not (root / ".git").exists():
             root = root.parent
         key = str(root) if (root / ".git").exists() else cwd
-        stamps = Path(run_dir) / "touch"
+        stamps = state.internal(run_dir) / "touch"
         stamp = stamps / hashlib.sha1(key.encode()).hexdigest()[:16]
         if stamp.exists() and time.time() - stamp.stat().st_mtime < TOUCH_INTERVAL:
             return
-        stamps.mkdir(exist_ok=True)
+        stamps.mkdir(parents=True, exist_ok=True)
         stamp.touch()
         st = state.load(run_dir)
         for tid, t in st["tickets"].items():

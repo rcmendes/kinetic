@@ -24,6 +24,20 @@ _Avoid_: Advisory, soft, best-effort
 The strength of model an agent needs, either `standard` or `strong`, which each harness maps to a concrete model and reasoning effort.
 _Avoid_: Model name (sonnet, opus) in agent definitions, size, class
 
+## Projects and runs
+
+**Project**:
+The folder, not itself a git repo, that holds everything kinetic keeps about one product, whether a monorepo or several repos: its config, its bare clones and its runs.
+_Avoid_: Workspace, brand folder, kinetic home
+
+**Run**:
+One demand taken through the pipeline inside a project, with its own folder for its documents, its worktrees and its state. It may start from a ticket, an idea or a spec.
+_Avoid_: Job, session, task, workflow
+
+**Session binding**:
+The record, kept in the project, that one harness session works on one run. Hooks use it when the session is not inside the run's folder.
+_Avoid_: Active-run pointer, current run, lock
+
 ## Trackers
 
 **Tracker adapter**:

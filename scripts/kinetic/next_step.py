@@ -4,15 +4,10 @@ import argparse
 import json
 import os
 import sys
-from pathlib import Path
 
-from kinetic import frontier, state
+from kinetic import frontier, project, state
 
 DONE = {"done", "done_with_concerns", "merged", "released"}
-
-
-def active_run_file() -> Path:
-    return Path(os.path.expanduser("~")) / ".config" / "kinetic" / "active-run"
 
 
 def _r(command: str, reason: str) -> dict:
@@ -26,7 +21,7 @@ def suggest(st: dict | None) -> dict:
     deciding = sorted(i for i, t in tickets.items() if t["status"] == "needs_decision")
     if deciding:
         return _r("/kinetic:run", f"ticket {deciding[0]} needs a decision")
-    stale = state.stale_running(st, Path(st["run_dir"]) / "reports")
+    stale = state.stale_running(st, state.internal(st["run_dir"]) / "reports")
     if stale:
         return _r("/kinetic:run", "recover " + ", ".join(stale))
     if st["phase"] == "build":
@@ -40,17 +35,16 @@ def suggest(st: dict | None) -> dict:
     return _r("/kinetic:status", "check the board")
 
 
-def _load_active() -> dict | None:
-    try:
-        run_dir = active_run_file().read_text().strip()
-    except OSError:
-        return None
-    if not run_dir:
-        return None
-    try:
-        return state.load(run_dir)
-    except OSError:
-        return None
+def _active() -> dict:
+    """The suggestion for the run of the cwd, else the project's only open run."""
+    run = project.run_for_path(os.getcwd())
+    if run is None:
+        proj = project.find()
+        runs = project.open_runs(proj) if proj else []
+        if len(runs) > 1:
+            return _r("/kinetic:run", f"{len(runs)} open runs; open one from its folder")
+        run = runs[0]["run_dir"] if runs else None
+    return suggest(state.load(run) if run else None)
 
 
 def main(argv=None) -> int:
@@ -58,8 +52,7 @@ def main(argv=None) -> int:
     p.add_argument("--run", default=None)
     a = p.parse_args(argv)
     try:
-        st = state.load(a.run) if a.run else _load_active()
-        print(json.dumps(suggest(st)))
+        print(json.dumps(suggest(state.load(a.run)) if a.run else _active()))
     except (ValueError, OSError, KeyError) as e:
         print(str(e), file=sys.stderr)
         return 1

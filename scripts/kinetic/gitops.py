@@ -9,7 +9,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from kinetic import config, state
+from kinetic import config, project, state
 
 
 PUBLISHABLE = ("done", "done_with_concerns", "merged", "released")
@@ -126,15 +126,14 @@ def merge_order(st: dict) -> list:
     return order
 
 
-def pin(run_dir, upstream_repo: str, downstream_repo: str, central=None) -> dict:
+def pin(run_dir, upstream_repo: str, downstream_repo: str, project_config: Path) -> dict:
     repos = state.load(run_dir)["repos"]
     for name in (upstream_repo, downstream_repo):
         if name not in repos:
             raise ValueError(f"repo '{name}' not registered in state")
     up_path, down_path = Path(repos[upstream_repo]["path"]), Path(repos[downstream_repo]["path"])
-    central = central or config.DEFAULT_CENTRAL
-    publish = config.resolve(upstream_repo, up_path, central)["publish_snapshot"]
-    pin_cmd = config.resolve(downstream_repo, down_path, central)["pin"]
+    publish = config.resolve(upstream_repo, up_path, project_config)["publish_snapshot"]
+    pin_cmd = config.resolve(downstream_repo, down_path, project_config)["pin"]
     for name, cmd, key in ((upstream_repo, publish, "publish_snapshot"), (downstream_repo, pin_cmd, "pin")):
         if not cmd:
             return {"ok": False, "log_path": None, "reason": f"{key} command is unset for repo '{name}'"}
@@ -142,7 +141,7 @@ def pin(run_dir, upstream_repo: str, downstream_repo: str, central=None) -> dict
     ref = head.stdout.strip()
     if head.returncode != 0 or not ref:
         raise RuntimeError(head.stderr.strip() or f"cannot resolve HEAD in {up_path}")
-    logs = Path(run_dir) / "logs"
+    logs = state.internal(run_dir) / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     log_path = logs / f"pin-{upstream_repo}-{downstream_repo}-{ts}.log"
@@ -158,6 +157,22 @@ def pin(run_dir, upstream_repo: str, downstream_repo: str, central=None) -> dict
             if t["repo"] == upstream_repo and t["status"] in PUBLISHABLE:
                 state.set_ticket(run_dir, tid, snapshot_published=True)
     return {"ok": ok, "log_path": str(log_path)}
+
+
+def run_setup(run_dir, repo_name: str, worktree, project_config: Path) -> dict:
+    """Run the repo's optional setup command in a fresh worktree; never touches state or the worktree."""
+    worktree = Path(worktree)
+    cmd = config.resolve(repo_name, worktree, Path(project_config))["setup"]
+    if not cmd:
+        return {"ok": True, "skipped": True, "log_path": None}
+    logs = state.internal(run_dir) / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    log_path = logs / f"setup-{worktree.name}-{ts}.log"
+    with open(log_path, "wb") as log:
+        rc = subprocess.run(cmd, shell=True, cwd=str(worktree), stdin=subprocess.DEVNULL,
+                            stdout=log, stderr=subprocess.STDOUT).returncode
+    return {"ok": rc == 0, "skipped": False, "log_path": str(log_path)}
 
 
 def main(argv=None) -> int:
@@ -180,6 +195,10 @@ def main(argv=None) -> int:
     pn.add_argument("--run", required=True)
     pn.add_argument("--upstream", required=True)
     pn.add_argument("--downstream", required=True)
+    su = sub.add_parser("setup")
+    su.add_argument("--run", required=True)
+    su.add_argument("--repo-name", required=True)
+    su.add_argument("--path", required=True)
     sh = sub.add_parser("status-hash")
     sh.add_argument("--repo", required=True)
     au = sub.add_parser("assert-unchanged")
@@ -203,9 +222,15 @@ def main(argv=None) -> int:
         elif a.cmd == "assert-unchanged":
             out = assert_unchanged(Path(a.repo), a.head, a.status_hash)
             rc = 0 if out["ok"] else 1
-        else:
-            out = pin(a.run, a.upstream, a.downstream)
+        elif a.cmd == "setup":
+            out = run_setup(a.run, a.repo_name, Path(a.path), project.config_path(a.run))
             rc = 0 if out["ok"] else 1
+        else:
+            out = pin(a.run, a.upstream, a.downstream, project.config_path(a.run))
+            rc = 0 if out["ok"] else 1
+    except project.NoProject as e:
+        print(str(e), file=sys.stderr)
+        return 2
     except (ValueError, OSError, KeyError, RuntimeError, config.ConfigError) as e:
         print(str(e), file=sys.stderr)
         return 1

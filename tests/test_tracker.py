@@ -163,10 +163,17 @@ class OrbitTrackerTest(unittest.TestCase):
             self.assertEqual(ticket_store.for_tracker(tracker), {"kind": "local"}, tracker)
 
     def test_store_record_cli(self):
-        from kinetic import tracker
-        self.settings.write_text(json.dumps({"tracker": "local"}))
-        with mock.patch.object(tracker, "DEFAULT_SETTINGS", self.settings), \
-                mock.patch("sys.stdout") as out:
+        from kinetic import project, tracker
+        proj = project.create(self.tmp, "proj")
+        project.update(proj, {"tracker": "orbit"})
+        with mock.patch("os.getcwd", return_value=str(proj)), mock.patch("sys.stdout") as out:
             self.assertEqual(tracker.main(["store-record"]), 0)
         printed = "".join(c.args[0] for c in out.write.call_args_list)
-        self.assertEqual(json.loads(printed), {"kind": "local"})
+        self.assertEqual(json.loads(printed)["kind"], "orbit")
+
+    def test_tracker_cli_without_project_is_local(self):
+        from kinetic import tracker
+        with mock.patch("os.getcwd", return_value=str(self.tmp)), mock.patch("sys.stdout") as out:
+            self.assertEqual(tracker.main(["resolve"]), 0)
+        printed = "".join(c.args[0] for c in out.write.call_args_list)
+        self.assertEqual(json.loads(printed)["tracker"], "local")

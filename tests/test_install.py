@@ -186,7 +186,10 @@ class InstallDevinTest(InstallCase):
 
     def setUp(self):
         super().setUp()
-        self.base_path = os.environ.get("PATH", "")
+        # PATH without any real `devin`, so "without CLI" tests hold on machines that have it
+        self.base_path = os.pathsep.join(
+            d for d in os.environ.get("PATH", "").split(os.pathsep)
+            if not os.access(os.path.join(d, "devin"), os.X_OK))
         self.bin = self.tmp / "devin-bin"
         self.bin.mkdir()
         self.devin_log = self.tmp / "devin.log"
@@ -420,9 +423,9 @@ class InstallCodexTest(InstallCase):
     a merged ~/.codex/hooks.json. It never shells out to codex (hook trust is
     a manual /hooks step) and does not require the codex CLI on PATH."""
 
-    USER_ONLY = {"ask", "catalog-setup", "cleanup", "doctor", "implement", "init", "run", "status"}
-    SKILL_NAMES = {"ask", "catalog-refresh", "catalog-setup", "cleanup", "discover", "doctor", "grill", "implement", "init", "retro",
-                   "run", "ship", "specify", "status", "tdd", "decompose"}
+    USER_ONLY = {"ask", "catalog-setup", "cleanup", "doctor", "implement", "run", "status"}
+    SKILL_NAMES = {"ask", "catalog-refresh", "catalog-setup", "cleanup", "discover", "doctor", "grill", "implement", "retro",
+                   "run", "ship", "specify", "start", "status", "tdd", "decompose"}
     AGENT_NAMES = {"fix-reviewer", "implementer", "implementer-strong",
                    "integration-reviewer", "spec-reviewer",
                    "standards-reviewer"}
@@ -686,9 +689,9 @@ class InstallOpenCodeTest(InstallCase):
     no trust step) so nothing foreign is touched; the opencode CLI is not
     required on PATH."""
 
-    USER_ONLY = {"ask", "catalog-setup", "cleanup", "doctor", "implement", "init", "run", "status"}
-    SKILL_NAMES = {"ask", "catalog-refresh", "catalog-setup", "cleanup", "discover", "doctor", "grill", "implement", "init", "retro",
-                   "run", "ship", "specify", "status", "tdd", "decompose"}
+    USER_ONLY = {"ask", "catalog-setup", "cleanup", "doctor", "implement", "run", "status"}
+    SKILL_NAMES = {"ask", "catalog-refresh", "catalog-setup", "cleanup", "discover", "doctor", "grill", "implement", "retro",
+                   "run", "ship", "specify", "start", "status", "tdd", "decompose"}
     AGENT_NAMES = {"fix-reviewer", "implementer", "implementer-strong",
                    "integration-reviewer", "spec-reviewer",
                    "standards-reviewer"}

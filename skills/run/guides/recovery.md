@@ -1,8 +1,8 @@
 # Recovery
 
-Use this when `~/.config/kinetic/active-run` points at an existing run directory (a new session, a crash, or `/kinetic:run` invoked again). Never re-initialise: `state init` refuses an existing state, and `--force` is only for an explicit user request to restart.
+Use this when `kinetic project current-run` names a run (the session is in the run folder or one of its worktrees), or the user picked an open run from `kinetic project runs` (a new session, a crash, or `/kinetic:run` invoked again). Never re-initialise: `state init` refuses an existing state, and `--force` is only for an explicit user request to restart.
 
-Never assume an agent from a previous session is alive. Re-derive everything from `state.json`, reports and git.
+Never assume an agent from a previous session is alive. Re-derive everything from `<run_dir>/.kinetic/state.json`, reports and git.
 
 ## On every entry
 
@@ -20,4 +20,4 @@ A run recorded in `discover` resumes from `<run_dir>/discovery.md` and `state.re
 
 ## Continue
 
-Before resuming in a new session, rewrite the pointer with the same `printf '%s' <run_dir> | tee ~/.config/kinetic/active-run` command from `run/SKILL.md`: that claims the run for this session, so the hooks act here and stop acting in the old one. Resume at the recorded phase: re-read the guide for that phase and continue from the first unfinished step. Gates already recorded approved stay approved; a gate not recorded is asked again. If the phase is `build`, start a round with `kinetic.frontier`. If the user wants to abandon the run, `rm -f ~/.config/kinetic/active-run` only on their say-so.
+Before resuming in a new session, bind the run with the same `kinetic project use-run --run <run_dir>` command from `run/SKILL.md`: that claims the run for this session, so the hooks act here and stop acting in the old one. Resume at the recorded phase: re-read the guide for that phase and continue from the first unfinished step. Gates already recorded approved stay approved; a gate not recorded is asked again. If the phase is `build`, start a round with `kinetic.frontier`. If the user wants to abandon the run, stop working on it; the run folder stays for reference.

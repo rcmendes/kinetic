@@ -6,12 +6,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 HOOKS = ROOT / "hooks"
 sys.path.insert(0, str(ROOT / "scripts"))
-from kinetic import state  # noqa: E402
+from kinetic import project, state  # noqa: E402
 
 T1 = "2026-01-01T00:00:00.000000+00:00"
 T2 = "2026-01-01T00:00:01.000000+00:00"
@@ -22,32 +23,39 @@ class HookCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.home = Path(os.path.realpath(self.tmp.name)) / "home"
+        base = Path(os.path.realpath(self.tmp.name))
+        self.home = base / "home"
         self.home.mkdir()
-        self.run_dir = Path(os.path.realpath(self.tmp.name)) / "run"
-        self.repo = Path(os.path.realpath(self.tmp.name)) / "repo"
-        self.repo.mkdir()
+        self.proj = project.create(base, "proj")
+        self.run_dir = project.run_dir(self.proj, "run")
+        # the real layout: a repo's worktree lives inside the run
+        self.repo = self.run_dir / "worktrees" / "api"
+        self.repo.mkdir(parents=True)
 
     def activate(self, granted=True):
         state.init(self.run_dir, "feature", "X-1")
         state.set_repo(self.run_dir, "api", str(self.repo), "main")
         if granted:
             state.record_gate(self.run_dir, "breakdown", True)
-        ptr = self.home / ".config" / "kinetic"
-        ptr.mkdir(parents=True)
-        (ptr / "active-run").write_text(str(self.run_dir))
+
+    def bind(self, sid, run_dir=None):
+        (self.proj / ".kinetic" / "sessions" / sid).write_text(str(run_dir or self.run_dir))
 
     def hook(self, name, payload, harness=None, env=None):
         """Run a hook as a subprocess. payload is a dict (JSON-encoded) or a raw
         stdin string; harness adds --harness <id>; env merges extra variables
-        (e.g. DEVIN_PROJECT_DIR) over HOME=temp-home."""
+        (e.g. DEVIN_PROJECT_DIR) over HOME=temp-home. The hook process runs in the
+        run dir, so a payload without cwd resolves the run from there."""
         argv = [sys.executable, str(HOOKS / f"{name}.py")]
         if harness:
             argv += ["--harness", harness]
         merged = dict(os.environ, HOME=str(self.home))
+        for k in ("CLAUDE_PROJECT_DIR", "DEVIN_PROJECT_DIR"):  # the caller's own session must not leak in
+            merged.pop(k, None)
         merged.update(env or {})
         data = payload if isinstance(payload, str) else json.dumps(payload)
-        p = subprocess.run(argv, input=data, capture_output=True, text=True, env=merged)
+        p = subprocess.run(argv, input=data, capture_output=True, text=True, env=merged,
+                           cwd=str(self.run_dir))
         self.assertEqual(p.returncode, 0, p.stderr)
         return json.loads(p.stdout) if p.stdout.strip() else None
 
@@ -69,27 +77,67 @@ class SessionScope(HookCase):
         return self.decision(self.hook("isolation", dict(
             {"tool_name": "Write", "tool_input": {"file_path": path}}, **extra)))
 
-    def claim(self, sid, cmd="printf '%s' /r | tee ~/.config/kinetic/active-run"):
-        self.hook("claim_run", {"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": sid})
+    def claim(self, sid, cmd=None, cwd=None):
+        cmd = cmd or f"kinetic project use-run --run {self.run_dir}"
+        self.hook("claim_run", {"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": sid,
+                                "cwd": str(cwd or self.proj)})
 
-    def test_pointer_write_claims_run_for_that_session(self):
+    def binding(self, sid):
+        f = self.proj / ".kinetic" / "sessions" / sid
+        return f.read_text() if f.exists() else None
+
+    def test_use_run_claims_run_for_that_session(self):
         self.activate()
         self.claim("s1")
         self.assertEqual(state.load(self.run_dir).get("owner_session"), "s1")
         self.claim("s2")  # a resume in a new session re-claims
         self.assertEqual(state.load(self.run_dir).get("owner_session"), "s2")
 
+    def test_claim_run_writes_session_binding(self):
+        self.activate()
+        self.claim("s1", cmd="kinetic project use-run --run 'runs/run' && echo ok")
+        self.assertEqual(self.binding("s1"), str(self.run_dir))
+        self.assertEqual(state.load(self.run_dir).get("owner_session"), "s1")
+        # not a run, or an unsafe session id: nothing written
+        self.claim("s2", cmd=f"kinetic project use-run --run {self.proj}")
+        self.assertIsNone(self.binding("s2"))
+        self.claim("../x")
+        self.assertFalse((self.proj / ".kinetic" / "x").exists())
+        self.assertEqual(state.load(self.run_dir).get("owner_session"), "s1")
+
+    def test_claim_run_via_plugin_bin_path(self):
+        self.activate()
+        self.claim("s1", cmd=f"python3 /opt/plugin/bin/kinetic project use-run --run {self.run_dir}")
+        self.assertEqual(self.binding("s1"), str(self.run_dir))
+
+    def test_bound_session_isolated_after_cd_out_of_project(self):
+        self.activate()
+        self.claim("s1")
+        outside = str(self.home / "elsewhere.txt")
+        env = {"CLAUDE_PROJECT_DIR": str(self.proj)}
+        out = self.hook("isolation", {"tool_name": "Write", "tool_input": {"file_path": outside},
+                                      "session_id": "s1", "cwd": str(self.home)}, env=env)
+        self.assertEqual(self.decision(out), "deny")
+        # no binding for this session: still no run picked at the project root
+        out = self.hook("isolation", {"tool_name": "Write", "tool_input": {"file_path": outside},
+                                      "session_id": "s9", "cwd": str(self.home)}, env=env)
+        self.assertIsNone(out)
+
     def test_unrelated_bash_does_not_claim(self):
         self.activate()
-        self.claim("s1", cmd="ls ~/.config/kinetic")
+        self.claim("s1", cmd="kinetic project runs")
         self.assertNotIn("owner_session", state.load(self.run_dir))
+        self.assertIsNone(self.binding("s1"))
 
     def test_owner_session_is_isolated_other_session_is_not(self):
         self.activate()
         self.claim("s1")
         outside = str(self.home / "elsewhere.txt")
         self.assertEqual(self.write(outside, session_id="s1"), "deny")
-        self.assertIsNone(self.write(outside, session_id="s2", cwd=str(self.home)))
+        self.assertIsNone(self.write(outside, session_id="s2", cwd=str(self.proj)))
+        self.bind("s2")  # bound to the run, but s1 owns it
+        self.assertIsNone(self.write(outside, session_id="s2", cwd=str(self.proj)))
+        self.assertEqual(self.write(outside, session_id="s1", cwd=str(self.proj)), "deny")
 
     def test_cwd_inside_run_dir_is_in_scope_for_any_session(self):
         self.activate()
@@ -109,7 +157,7 @@ class SessionScope(HookCase):
         self.activate()
         self.claim("s1")
         self.stamp(repo_edit=T3)
-        self.assertIsNone(self.hook("completion_gate", {"session_id": "s2", "cwd": str(self.home)}))
+        self.assertIsNone(self.hook("completion_gate", {"session_id": "s2", "cwd": str(self.proj)}))
         self.assertEqual(self.hook("completion_gate", {"session_id": "s1"})["decision"], "block")
 
 
@@ -240,7 +288,7 @@ class Isolation(HookCase):
 
     def test_isolation_denies_prefix_sibling(self):
         self.activate()
-        out = self.hook("isolation", {"tool_input": {"file_path": str(self.repo) + "-evil/a.py"}})
+        out = self.hook("isolation", {"tool_input": {"file_path": str(self.run_dir) + "-evil/a.py"}})
         self.assertEqual(self.decision(out), "deny")
 
     def test_isolation_resolves_symlinks(self):
@@ -253,7 +301,7 @@ class Isolation(HookCase):
 
     def test_isolation_asks_on_corrupt_state(self):
         self.activate()
-        (self.run_dir / "state.json").write_text("{not json")
+        (self.run_dir / ".kinetic" / "state.json").write_text("{not json")
         out = self.hook("isolation", {"tool_input": {"file_path": "/etc/passwd"}})
         self.assertEqual(self.decision(out), "ask")
 
@@ -263,11 +311,10 @@ class Isolation(HookCase):
         out = self.hook("isolation", {"tool_input": {"file_path": "/etc/passwd"}})
         self.assertEqual(self.decision(out), "ask")
 
-    def test_isolation_noop_when_pointer_dir_has_no_state(self):
-        ptr = self.home / ".config" / "kinetic"
-        ptr.mkdir(parents=True)
-        (ptr / "active-run").write_text(str(self.run_dir))
-        self.assertIsNone(self.hook("isolation", {"tool_input": {"file_path": "/etc/passwd"}}))
+    def test_isolation_noop_when_bound_run_has_no_state(self):
+        self.bind("s1")
+        self.assertIsNone(self.hook("isolation", {"tool_input": {"file_path": "/etc/passwd"},
+                                                  "session_id": "s1", "cwd": str(self.proj)}))
 
     def test_isolation_noop_without_run(self):
         self.assertIsNone(self.hook("isolation", {"tool_input": {"file_path": "/etc/passwd"}}))
@@ -366,7 +413,7 @@ class Confirm(HookCase):
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
         env["HOME"] = str(self.home)
         p = subprocess.run([sys.executable, str(d / "isolation.py")], capture_output=True, text=True, env=env,
-                           input=json.dumps({"tool_input": {"file_path": "/etc/passwd"}}))
+                           cwd=str(self.run_dir), input=json.dumps({"tool_input": {"file_path": "/etc/passwd"}}))
         self.assertEqual(p.returncode, 0)
         self.assertEqual(json.loads(p.stdout)["hookSpecificOutput"]["permissionDecision"], "ask")
 
@@ -424,8 +471,8 @@ class DevinHooks(HookCase):
                                      self.edit(str(self.repo / "a.py")), cwd=self.repo))
         # relative path resolves against DEVIN_PROJECT_DIR, not the hook's cwd
         self.assertIsNone(self.devin("isolation", self.edit("sub/a.py"), cwd=self.repo))
-        # without DEVIN_PROJECT_DIR a relative path falls back to os.getcwd()
-        out = self.devin("isolation", self.edit("sub/a.py"))
+        # without DEVIN_PROJECT_DIR a relative path falls back to os.getcwd() (the run dir here)
+        out = self.devin("isolation", self.edit("../a.py"))
         self.assertEqual(out["decision"], "block")
 
     def test_isolation_reads_path_alias(self):
@@ -458,7 +505,7 @@ class DevinHooks(HookCase):
 
     def test_fail_closed_asks_in_devin_shape(self):
         self.activate()
-        (self.run_dir / "state.json").write_text("{not json")
+        (self.run_dir / ".kinetic" / "state.json").write_text("{not json")
         out = self.devin("isolation", self.edit("/etc/passwd"), cwd=self.repo)
         self.assertIsNone(out.get("decision"))
         self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "ask")
@@ -472,15 +519,15 @@ class DevinHooks(HookCase):
     def test_claim_run_and_session_scope_via_exec(self):
         self.activate()
         self.devin("claim_run", {"hook_event_name": "PostToolUse", "tool_name": "exec",
-                                 "tool_input": {"command": "printf '%s' /r | tee "
-                                                      "~/.config/kinetic/active-run",
+                                 "tool_input": {"command": "kinetic project use-run --run "
+                                                           + str(self.run_dir),
                                                 "shell_id": "main"},
                                  "session_id": "s1", "prompt_id": "p1"}, cwd=self.repo)
         self.assertEqual(state.load(self.run_dir).get("owner_session"), "s1")
         # another session is out of scope (its cwd is the project dir, not the run dir)
         self.assertIsNone(self.devin("isolation", self.edit("/etc/passwd",
                                                             session_id="s2"),
-                                     cwd=self.repo))
+                                     cwd=self.proj))
         out = self.devin("isolation", self.edit("/etc/passwd"), cwd=self.repo)
         self.assertEqual(out["decision"], "block")
 
@@ -565,7 +612,7 @@ class DevinHooks(HookCase):
         out = self.devin("completion_gate",
                          {"hook_event_name": "Stop", "stop_hook_active": False,
                           "session_id": "s1", "prompt_id": "p1",
-                          "last_assistant_message": "done"}, cwd=self.home)
+                          "last_assistant_message": "done"}, cwd=self.repo)
         self.assertEqual(out["decision"], "block")
         self.assertIn("kinetic verify", out["reason"])
 
@@ -709,7 +756,7 @@ class CodexHooks(HookCase):
 
     def test_isolation_fail_closed_asks_on_apply_patch_garbage(self):
         self.activate()
-        (self.run_dir / "state.json").write_text("{not json")
+        (self.run_dir / ".kinetic" / "state.json").write_text("{not json")
         out = self.codex("isolation", self.pre(
             "apply_patch", {"command": "not a patch at all"}))
         self.assertEqual(self.decision(out), "ask")
@@ -721,8 +768,7 @@ class CodexHooks(HookCase):
                     "cwd": str(self.repo), "model": "gpt-6.1-sol",
                     "tool_name": "Bash",
                     "tool_input": {"command":
-                                   "printf '%s' /r | tee "
-                                   "~/.config/kinetic/active-run"},
+                                   f"kinetic project use-run --run {self.run_dir}"},
                     "tool_response": "", "tool_use_id": "tu1"})
         self.assertEqual(state.load(self.run_dir).get("owner_session"), "s1")
 
@@ -775,8 +821,7 @@ class OpenCodeHooks(HookCase):
         self.activate()
         self.assertIsNone(self.oc("isolation",
                                   self.pre("write", {"path": "sub/a.py"})))
-        out = self.oc("isolation", self.pre("write", {"path": "a.py"},
-                                            cwd=str(self.home)))
+        out = self.oc("isolation", self.pre("write", {"path": "../../../a.py"}))
         self.assertEqual(out["decision"], "deny")
 
     def test_patch_tool_extracts_file_paths(self):
@@ -849,18 +894,16 @@ class OpenCodeHooks(HookCase):
     def test_claim_run_via_shell(self):
         self.activate()
         self.oc("claim_run", self.post(
-            "shell", {"command": "printf '%s' /r | tee "
-                                "~/.config/kinetic/active-run"}))
+            "shell", {"command": f"kinetic project use-run --run {self.run_dir}"}))
         self.assertEqual(state.load(self.run_dir).get("owner_session"), "s1")
 
     def test_session_scope_uses_sessionID(self):
         self.activate()
         self.oc("claim_run", self.post(
-            "shell", {"command": "printf '%s' /r | tee "
-                                "~/.config/kinetic/active-run"}, sid="s1"))
+            "shell", {"command": f"kinetic project use-run --run {self.run_dir}"}, sid="s1"))
         # another session is out of scope unless its cwd is inside the run dir
         self.assertIsNone(self.oc("isolation", self.pre(
-            "edit", {"path": "/etc/passwd"}, sid="s2", cwd=str(self.home))))
+            "edit", {"path": "/etc/passwd"}, sid="s2", cwd=str(self.proj))))
         out = self.oc("isolation", self.pre(
             "edit", {"path": "/etc/passwd"}, sid="s1"))
         self.assertEqual(out["decision"], "deny")
@@ -883,7 +926,7 @@ class OpenCodeHooks(HookCase):
 
     def test_fail_closed_asks_in_opencode_shape(self):
         self.activate()
-        (self.run_dir / "state.json").write_text("{not json")
+        (self.run_dir / ".kinetic" / "state.json").write_text("{not json")
         out = self.oc("isolation", self.pre("edit", {"path": "/etc/passwd"}))
         self.assertEqual(out["decision"], "ask")
         self.assertIn("could not decide", out["reason"])
@@ -923,6 +966,29 @@ class RecordEditAndOrient(HookCase):
 
     def test_orient_silent_without_run(self):
         self.assertIsNone(self.hook("orient", {}))
+        self.assertIsNone(self.hook("orient", {"cwd": str(self.proj), "session_id": "s1"}))
+
+    def test_orient_names_open_runs_at_root_without_binding(self):
+        self.activate()
+        text = self.hook("orient", {"cwd": str(self.proj), "session_id": "s1"})[
+            "hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(len(text.splitlines()), 1)
+        self.assertIn("run", text)
+        self.assertIn("/kinetic:run", text)
+
+    def test_orient_outside_project_offers_start(self):
+        out = self.hook("orient", {"cwd": str(self.home), "session_id": "s1"})
+        self.assertEqual(out["hookSpecificOutput"]["additionalContext"],
+                         "kinetic: no project here. If this conversation becomes a project "
+                         "(a goal, the systems involved, references), offer /kinetic:start.")
+
+    def test_orient_resumes_bound_run_from_project_root(self):
+        self.activate()
+        state.set_owner(self.run_dir, "old")
+        self.bind("s1")
+        text = self.hook("orient", {"cwd": str(self.proj), "session_id": "s1"})[
+            "hookSpecificOutput"]["additionalContext"]
+        self.assertIn("feature", text)
 
     def test_orient_prints_at_most_five_lines(self):
         self.activate()
@@ -950,6 +1016,70 @@ class RecordEditAndOrient(HookCase):
 
 
 
+class ActiveRunTest(HookCase):
+    """_common.active_run in-process: the run from the cwd, else this session's binding."""
+
+    def setUp(self):
+        super().setUp()
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        os.environ.pop("DEVIN_PROJECT_DIR", None)
+        sys.path.insert(0, str(HOOKS))
+        import _common
+        self._common = _common
+        self.activate()
+
+    def run_of(self, **inp):
+        found = self._common.active_run(inp, tickets=False)
+        return found[0] if found else None
+
+    def test_active_run_from_worktree_cwd(self):
+        self.assertEqual(self.run_of(cwd=str(self.repo / "src")), str(self.run_dir))
+        self.assertEqual(self.run_of(cwd=str(self.repo), session_id="s9"), str(self.run_dir))
+
+    def test_opencode_shell_workdir_outside_project_keeps_bound_run(self):
+        self.bind("s1")
+        payload = {"kinetic_event": "PreToolUse", "cwd": str(self.proj), "sessionID": "s1",
+                   "tool": "shell", "input": {"command": "ls", "workdir": str(self.home)}}
+        inp = self._common._normalize(payload, "opencode")
+        self.assertEqual(inp["cwd"], str(self.home))
+        self.assertEqual(self.run_of(**inp), str(self.run_dir))
+        # no binding for this session: still no run picked
+        inp = self._common._normalize(dict(payload, sessionID="s9"), "opencode")
+        self.assertIsNone(self.run_of(**inp))
+
+    def test_codex_shell_workdir_outside_project_keeps_bound_run(self):
+        # Codex 0.169 sends the shell call's workdir as cwd (no workdir in tool_input) and
+        # runs the hook process in the session dir: that process cwd is the launch dir.
+        self.bind("s1")
+        payload = {"hook_event_name": "PreToolUse", "session_id": "s1", "cwd": str(self.home),
+                   "tool_name": "Bash", "tool_input": {"command": "pwd"}}
+        with mock.patch.object(os, "getcwd", return_value=str(self.proj)):
+            inp = self._common._normalize(payload, "codex")
+            self.assertEqual(self.run_of(**inp), str(self.run_dir))
+            # no binding for this session: still no run picked
+            inp = self._common._normalize(dict(payload, session_id="s9"), "codex")
+            self.assertIsNone(self.run_of(**inp))
+
+    def test_active_run_from_session_binding(self):
+        self.bind("s1")
+        self.assertEqual(self.run_of(cwd=str(self.proj), session_id="s1"), str(self.run_dir))
+        self.assertEqual(self.run_of(cwd=str(self.proj / "bare-repos"), session_id="s1"),
+                         str(self.run_dir))
+        self.assertIsNone(self.run_of(cwd=str(self.proj), session_id="s2"))
+        self.assertIsNone(self.run_of(cwd=str(self.home), session_id="s1"))
+        # the binding names this session, but another session owns the run
+        state.set_owner(self.run_dir, "s0")
+        self.assertIsNone(self.run_of(cwd=str(self.proj), session_id="s1"))
+
+    def test_active_run_none_at_root_with_two_runs_no_binding(self):
+        state.init(project.run_dir(self.proj, "run2"), "quick", "X-2")
+        self.assertIsNone(self.run_of(cwd=str(self.proj), session_id="s1"))
+        self.assertIsNone(self.run_of(cwd=str(self.proj)))
+
+
 class TouchTicketTest(HookCase):
     """_common.touch_ticket in-process, with the run's ticket store faked."""
 
@@ -960,7 +1090,7 @@ class TouchTicketTest(HookCase):
         import _common
         self._common = _common
         self.activate()
-        self.wt = Path(os.path.realpath(self.tmp.name)) / "wt-a"
+        self.wt = self.run_dir / "worktrees" / "api-a"
         (self.wt / "src").mkdir(parents=True)
         (self.wt / ".git").write_text("gitdir: elsewhere\n")  # a git worktree
         state.set_ticket(self.run_dir, "01-api-a", repo="api", status="running",
@@ -987,7 +1117,7 @@ class TouchTicketTest(HookCase):
         self._common.touch_ticket(self.payload(self.wt))
         self._common.touch_ticket(self.payload(self.wt / "src"))
         self.assertEqual(self.touched, ["01-api-a"])
-        for stamp in (self.run_dir / "touch").iterdir():
+        for stamp in (self.run_dir / ".kinetic" / "touch").iterdir():
             old = stamp.stat().st_mtime - 301
             os.utime(stamp, (old, old))
         self._common.touch_ticket(self.payload(self.wt))
@@ -1023,13 +1153,10 @@ class UnreachableStoreHookTest(HookCase):
                                               "names": {"run": "kinetic-run-<run id>"},
                                               "published": True}}
         state.init(self.run_dir, "feature", "X-1", ticket_store_record=record)
-        raw = json.loads((self.run_dir / "state.json").read_text())
+        raw = json.loads((self.run_dir / ".kinetic" / "state.json").read_text())
         raw["repos"] = {"api": {"path": str(self.repo), "integration_branch": "main"}}
         raw["gates"] = {"breakdown": {"approved": True, "granted_at": T1, "at": T1}}
-        (self.run_dir / "state.json").write_text(json.dumps(raw))
-        ptr = self.home / ".config" / "kinetic"
-        ptr.mkdir(parents=True)
-        (ptr / "active-run").write_text(str(self.run_dir))
+        (self.run_dir / ".kinetic" / "state.json").write_text(json.dumps(raw))
 
     def env(self):
         return {"PATH": "/usr/bin:/bin"}  # no orbit binary
@@ -1046,7 +1173,7 @@ class UnreachableStoreHookTest(HookCase):
         self.hook("record_edit", {"hook_event_name": "PostToolUse", "tool_name": "Write",
                                   "tool_input": {"file_path": str(self.repo / "a.py")},
                                   "cwd": str(self.repo)}, env=self.env())
-        raw = json.loads((self.run_dir / "state.json").read_text())
+        raw = json.loads((self.run_dir / ".kinetic" / "state.json").read_text())
         self.assertTrue(raw.get("unattributed_edit_at"))
         raw["verify"] = {"orb-a.b": {"exit_code": 0, "at": T1, "repo": "api", "log_path": "x"}}
         raw["unattributed_edit_at"] = T2
