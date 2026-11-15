@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from kinetic import board, frontier, gitops, graph, next_step, state, verify
+from kinetic import bare, board, discover, frontier, gitops, graph, next_step, project, state, verify
 from tests.fixtures import two_repo
+from tests.test_bare import make_remote
 
 
 def commit(path, name):
@@ -124,3 +126,53 @@ class EpicFlowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProjectE2ETests(unittest.TestCase):
+    def test_project_e2e(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, tmp, True)
+        env = {"HOME": str(tmp / "home"), "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+        old = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        for k, v in old.items():
+            self.addCleanup(lambda k=k, v=v: os.environ.__setitem__(k, v) if v is not None else os.environ.pop(k, None))
+        (tmp / "home").mkdir()
+
+        proj = project.create(tmp, "proj")
+        cfg = project.config_path(proj)
+        run = project.run_dir(proj, "r1")
+        names = ("api", "web")
+        for n in names:
+            make_remote(tmp / "remotes" / n)
+            bare.clone(project.bare_dir(proj), url=str(tmp / "remotes" / n), name=n)
+            discover.register(n, str(project.bare_dir(proj) / f"{n}.git"), "true",
+                              setup="touch setup.done", verify_ticket="true", project_config=cfg)
+        state.init(run, "epic", "e1")
+
+        for n in names:
+            b = project.bare_dir(proj) / f"{n}.git"
+            integ, ticket = run / "worktrees" / n, run / "worktrees" / f"{n}-t1"
+            gitops.create_worktree(b, integ, f"kinetic/r1/{n}", "main")
+            gitops.create_worktree(b, ticket, f"kinetic/r1/{n}-t1", "main")
+            self.assertTrue(gitops.run_setup(run, n, ticket, cfg)["ok"])
+            self.assertTrue((ticket / "setup.done").exists())
+            self.assertEqual(verify.run(run, "t1", n, ticket, cfg, scope="ticket")["exit_code"], 0)
+            commit(ticket, "feature.txt")
+            self.assertTrue(gitops.merge_ticket(integ, f"kinetic/r1/{n}-t1", f"kinetic/r1/{n}")["merged"])
+            self.assertTrue((integ / "feature.txt").exists())
+
+        self.assertTrue((proj / ".kinetic" / "sessions").is_dir())
+        self.assertTrue((state.internal(run) / "state.json").is_file())
+        self.assertTrue(list((state.internal(run) / "logs").glob("verify-*.log")))
+        self.assertEqual(sorted(project.load(proj)["repos"]), list(names))
+        # nothing project-scoped leaks into the machine config
+        machine = tmp / "home" / ".config" / "kinetic"
+        for leaked in ("repos.json", "active-run"):
+            self.assertFalse((machine / leaked).exists())
+        if (machine / "settings.json").exists():
+            import json
+            keys = set(json.loads((machine / "settings.json").read_text()))
+            self.assertFalse(keys & {"repos", "tracker", "tracker_settings", "tracker_names",
+                                     "tracker_description", "pr_template"})
