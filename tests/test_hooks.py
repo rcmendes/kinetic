@@ -110,6 +110,62 @@ class SessionScope(HookCase):
         self.claim("s1", cmd=f"python3 /opt/plugin/bin/kinetic project use-run --run {self.run_dir}")
         self.assertEqual(self.binding("s1"), str(self.run_dir))
 
+    def start(self, sid, cmd="kinetic project start-session", cwd=None):
+        self.claim(sid, cmd=cmd, cwd=cwd or self.home)
+
+    def mark(self, sid):
+        return self.home / ".config" / "kinetic" / "sessions" / sid
+
+    def test_start_session_writes_mark_outside_project(self):
+        self.start("s1")
+        self.assertTrue(self.mark("s1").is_file())
+        self.assertTrue(self.mark("s1").read_text().strip())
+
+    def test_start_session_inside_project_writes_nothing(self):
+        self.start("s1", cwd=self.proj)
+        self.assertFalse(self.mark("s1").exists())
+
+    def test_start_session_via_plugin_bin_path(self):
+        self.start("s1", cmd="python3 /opt/kinetic/bin/kinetic project start-session")
+        self.assertTrue(self.mark("s1").is_file())
+
+    def test_start_session_unsafe_session_id_writes_nothing(self):
+        self.start("../x")
+        self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_has_mark(self):
+        sys.path.insert(0, str(HOOKS))
+        import _common
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}):
+            self.assertFalse(_common.has_mark({"session_id": "s1"}))
+            self.start("s1")
+            self.assertTrue(_common.has_mark({"session_id": "s1"}))
+            self.assertFalse(_common.has_mark({"session_id": "../s1"}))
+
+    def test_sweep_deletes_mark_older_than_7_days_keeps_newer(self):
+        self.start("old")
+        self.start("new")
+        t = os.path.getmtime(self.mark("old")) - 8 * 86400
+        os.utime(self.mark("old"), (t, t))
+        self.start("trigger")
+        self.assertFalse(self.mark("old").exists())
+        self.assertTrue(self.mark("new").exists())
+
+    def test_sweep_keeps_old_binding_of_open_run_and_drops_done_or_gone(self):
+        self.activate()
+        done = project.run_dir(self.proj, "done-run")
+        state.init(done, "feature", "X-2")
+        state._mutate(done, lambda s: s.update(phase="done"))
+        self.bind("open")
+        self.bind("done", done)
+        self.bind("gone", self.proj / "runs" / "nope")
+        old = os.path.getmtime(self.proj / ".kinetic" / "sessions" / "open") - 30 * 86400
+        os.utime(self.proj / ".kinetic" / "sessions" / "open", (old, old))
+        self.claim("s1")
+        self.assertEqual(self.binding("open"), str(self.run_dir))
+        self.assertIsNone(self.binding("done"))
+        self.assertIsNone(self.binding("gone"))
+
     def test_bound_session_isolated_after_cd_out_of_project(self):
         self.activate()
         self.claim("s1")

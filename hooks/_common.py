@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -243,6 +244,47 @@ def session_file(proj, sid):
     if not sid or sid in (".", "..") or "/" in sid or os.sep in sid or "\0" in sid:
         return None
     return Path(proj) / ".kinetic" / "sessions" / sid
+
+
+MARK_DAYS = 7
+
+
+def mark_file(sid):
+    """~/.config/kinetic/sessions/<sid>, the start mark of a session; None for an unusable sid."""
+    if session_file(".", sid) is None:
+        return None
+    return Path.home() / ".config" / "kinetic" / "sessions" / str(sid)
+
+
+def has_mark(inp: dict) -> bool:
+    f = mark_file(inp.get("session_id"))
+    return bool(f and f.is_file())
+
+
+def sweep_sessions(proj=None) -> None:
+    """Delete start marks older than MARK_DAYS and, given a project, the run bindings whose run is
+    gone or done. Touches only regular files in those two folders; never raises."""
+    try:
+        cutoff = time.time() - MARK_DAYS * 86400
+        marks = Path.home() / ".config" / "kinetic" / "sessions"
+        for f in marks.iterdir() if marks.is_dir() else []:
+            try:
+                if f.is_file() and not f.is_symlink() and f.stat().st_mtime < cutoff:
+                    f.unlink()
+            except OSError:
+                pass
+        if proj is None or project is None:
+            return
+        open_dirs = {os.path.realpath(r["run_dir"]) for r in project.open_runs(proj)}
+        bindings = Path(proj) / ".kinetic" / "sessions"
+        for f in bindings.iterdir() if bindings.is_dir() else []:
+            try:
+                if f.is_file() and not f.is_symlink() and os.path.realpath(f.read_text().strip()) not in open_dirs:
+                    f.unlink()
+            except (OSError, ValueError):
+                pass
+    except Exception:
+        pass
 
 
 def _launch_dir(inp: dict):
