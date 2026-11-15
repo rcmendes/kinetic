@@ -795,7 +795,7 @@ class InstallOpenCodeTest(InstallCase):
         for needle in ("--harness", "opencode", "execute.before",
                        "execute.after", "experimental.idle",
                        "permission", "completion_gate", "record_edit",
-                       "isolation", "orient"):
+                       "isolation", "orient", "skill_guard.py", "SKILL_TOOLS"):
             self.assertIn(needle, text)
 
         m = json.loads(self.manifest_path.read_text())

@@ -490,7 +490,7 @@ Machine-level settings stay in `~/.config/kinetic/settings.json`:
 
 `skill_guard.deny` (`"skill_guard": {"deny": ["superpowers:brainstorming", ...]}`) replaces the default list of process skills the `skill_guard` hook refuses (`hooks/skill_guard.json`) in sessions working on a run of this project. A session that carries only the start mark uses the default list.
 
-`kinetic project create` writes the instruction files `<project>/AGENTS.md` and `<project>/CLAUDE.md`: the same kinetic block, between `<!-- kinetic:begin -->` and `<!-- kinetic:end -->`, that tells an agent opened in the project to work through `/kinetic:run`. `kinetic project instructions` rewrites that block and keeps any other text in the files.
+`kinetic project create` writes the instruction files `<project>/AGENTS.md` and `<project>/CLAUDE.md`: the same kinetic block, between `<!-- kinetic:begin -->` and `<!-- kinetic:end -->`, that tells an agent opened in the project to work through `/kinetic:run`. `kinetic project instructions` rewrites that block and keeps any other text in the files. Which harness reads which file, and from where, was probed (`docs/smoke/project.md`): Claude Code reads `CLAUDE.md` from the project folder and any folder under it, OpenCode reads `AGENTS.md` only for a session started at the project root, and neither reads them from inside a run's worktree, which is its own git root. On Claude Code and OpenCode the `skill_guard` hook covers that case.
 
 With `"tracker": "local"` (or no `tracker` key) tickets are files under `<run_dir>/issues/`. See [Trackers](#trackers) for the other trackers, `tracker_settings` and `tracker_names`, and [The PR template override](#the-pr-template-override) for `pr_template`.
 
@@ -535,7 +535,7 @@ The active run is the run of the current directory (the run folder or any worktr
 
 The run-scoped hooks (isolation, record_edit, completion_gate) find the run from the call's working directory, else from the session's binding (in the working directory's project, or in the project the session was started in once the working directory has left it, so a `cd` elsewhere does not lift isolation). They act only in the session that owns the run and on calls whose working directory is inside the run directory, so other Claude sessions on the machine are unaffected. At a project root with no binding they never pick a run. The push and deploy hooks always apply.
 
-`skill_guard` backs the `skill-ownership` guarantee: Enforced on Claude Code, where the profile names the skill tool (`tools.skill`), and Instructed on Devin, Codex and OpenCode, where the project instruction files and the skill text carry it. On Claude the hook sees only a skill the model invokes; a skill you type as a slash command is never refused (`docs/smoke/skill-hook.md`).
+`skill_guard` backs the `skill-ownership` guarantee: Enforced on Claude Code and OpenCode, where the profile names the skill tool (`tools.skill`), and Instructed on Devin and Codex, where the project instruction files and the skill text carry it until their skill calls are probed. On Claude the hook sees only a skill the model invokes; a skill you type as a slash command is never refused (`docs/smoke/skill-hook.md`). After updating, run `kinetic install --harness opencode` again so the generated OpenCode plugin routes skill calls to the hook.
 
 ## Recovery and troubleshooting
 

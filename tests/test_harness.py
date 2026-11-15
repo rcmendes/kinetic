@@ -66,12 +66,13 @@ class ProfileTest(unittest.TestCase):
         self.assertIn("/hooks", p["hooks"]["trust"])
         self.assertEqual(harness.instructed(p), ["skill-ownership"])
 
-    def test_skill_ownership_enforced_only_on_claude(self):
+    def test_skill_ownership_enforced_where_a_skill_hook_exists(self):
         self.assertIn("skill-ownership", harness.GUARANTEES)
         for hid in harness.HARNESS_IDS:
             p = harness.profile(hid)
-            self.assertEqual("skill-ownership" in p["enforced"], hid == "claude", hid)
-            self.assertEqual(p["tools"]["skill"], "Skill" if hid == "claude" else None, hid)
+            hooked = hid in ("claude", "opencode")  # the harnesses whose skill call a hook was seen to get
+            self.assertEqual("skill-ownership" in p["enforced"], hooked, hid)
+            self.assertEqual(p["tools"]["skill"], {"claude": "Skill", "opencode": "skill"}.get(hid), hid)
 
     def test_render_names_skill_tool(self):
         self.assertIn("patch=none skill=Skill\n", harness.render(harness.profile("claude")))

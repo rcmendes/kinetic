@@ -208,6 +208,11 @@ def _norm_opencode(inp: dict) -> dict:
     if out.get("tool_name") in ("shell", "bash"):
         # v2 renamed bash -> shell; accept both spellings
         out["tool_name"] = "Bash"
+    if name == "skill":
+        # the skill tool carries the skill name in input.id; skill_guard reads tool_input.skill
+        if isinstance(ti.get("id"), str) and not ti.get("skill"):
+            ti["skill"] = ti["id"]
+        out["tool_name"] = "Skill"
     if name == "patch":
         # same *** Begin Patch grammar as Codex apply_patch; file_paths is set
         # even when empty so fail-closed hooks can tell "no paths parsed"

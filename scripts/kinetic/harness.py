@@ -150,7 +150,8 @@ _PROFILES = {
             "shell": "shell",
             "edit": ["edit", "write"],
             "patch": "patch",
-            "skill": None,
+            # probed on OpenCode 2.2.5: tool.execute.before sees tool "skill" with the name in input.id
+            "skill": "skill",
         },
         "resume_subagent": True,      # task tool task_id resumes the child session
         "model_per_dispatch": True,   # task tool model param (v2 model_override permission)
@@ -172,7 +173,7 @@ _PROFILES = {
         # is bounded (the plugin stops after a few ignored rounds) and the API
         # is marked experimental; the CLI-level verify/ship stale refusal is
         # the hard gate and holds on every harness.
-        "enforced": [g for g in GUARANTEES if g not in ("verify-before-stop", "skill-ownership")],
+        "enforced": [g for g in GUARANTEES if g != "verify-before-stop"],
     },
 }
 

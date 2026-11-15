@@ -8,7 +8,7 @@ import _common
 _DEFAULT = Path(__file__).resolve().parent / "skill_guard.json"
 
 
-def skill_name(inp: dict):
+def skill_name(inp: dict) -> str | None:
     ti = inp.get("tool_input")
     name = ti.get("skill") if isinstance(ti, dict) else None
     if not isinstance(name, str):

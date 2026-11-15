@@ -17,7 +17,7 @@
        "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/confirm_write_ops.py\" --harness claude", "timeout": 10}]},
       {"matcher": "mcp__.*deploy.*|mcp__.*tekton.*trigger.*",
        "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/confirm_deploy.py\" --harness claude", "timeout": 10}]},
-      {"matcher": "Skill",
+      {"matcher": "^Skill$",
        "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/skill_guard.py\" --harness claude", "timeout": 10}]}
     ],
     "SessionStart": [

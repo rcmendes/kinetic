@@ -135,8 +135,12 @@ def write_instructions(project: Path) -> list:
         else:
             new = _BLOCK + "\n"
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(new)
-        os.replace(tmp, path)
+        try:
+            tmp.write_text(new)
+            os.replace(tmp, path)
+        except OSError:
+            tmp.unlink(missing_ok=True)  # no half-written file left behind
+            raise
         written.append(str(link))
     return written
 
@@ -229,7 +233,7 @@ def main(argv=None) -> int:
                 out = open_runs(proj)
             elif a.cmd == "run-dir":
                 rd = run_dir(proj, a.id)
-                out = {"run_dir": str(rd), "exists": rd.exists()}
+                out = {"run_dir": str(rd), "exists": rd.exists(), "phase": _phase(rd)}
             elif a.cmd == "instructions":
                 out = {"written": write_instructions(proj)}
             elif a.cmd == "current-run":

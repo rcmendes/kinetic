@@ -268,8 +268,8 @@ class SkillTextTest(unittest.TestCase):
 
     def test_run_resumes_or_suffixes_an_existing_recommended_id(self):
         text = (ROOT / "skills" / "run" / "SKILL.md").read_text()
-        for needle in ("kinetic project run-dir --id <recommended>", "resume it without asking",
-                       "next free numeric suffix (`-2`, `-3`, ...)"):
+        for needle in ("kinetic project run-dir --id <recommended>", "resume that run",
+                       "next free numeric suffix (`-2`, `-3`, ...)", '"phase"'):
             self.assertIn(needle, text)
         self.assertLess(text.index("kinetic project run-dir --id <recommended>"), text.index("Run id?"))
 

@@ -73,7 +73,17 @@ class ProjectTest(unittest.TestCase):
             self.assertEqual(p.returncode, 1, bad)
         p = subprocess.run([sys.executable, "-m", "kinetic", "project", "run-dir", "--id", "r1"],
                            cwd=self.proj, capture_output=True, text=True, env=env)
-        self.assertEqual(json.loads(p.stdout), {"run_dir": str(self.real / "runs" / "r1"), "exists": False})
+        self.assertEqual(json.loads(p.stdout), {"run_dir": str(self.real / "runs" / "r1"),
+                                                "exists": False, "phase": None})
+
+    def test_cli_run_dir_reports_phase(self):
+        for rid, phase in (("open", "grill"), ("finished", "done")):
+            (self.proj / "runs" / rid / ".kinetic").mkdir(parents=True)
+            (self.proj / "runs" / rid / ".kinetic" / "state.json").write_text(json.dumps({"phase": phase}))
+        (self.proj / "runs" / "nostate").mkdir()
+        got = {r: json.loads(self._cli(self.proj, "run-dir", "--id", r).stdout)["phase"]
+               for r in ("open", "finished", "nostate", "missing")}
+        self.assertEqual(got, {"open": "grill", "finished": "done", "nostate": None, "missing": None})
 
     def test_create_writes_instruction_files(self):
         for n in project.INSTRUCTION_FILES:
@@ -118,6 +128,13 @@ class ProjectTest(unittest.TestCase):
         t = (self.proj / "AGENTS.md").read_text()
         self.assertTrue(t.startswith("mine\n\n"))
         self.assertEqual(t.count(project.INSTRUCTIONS_BEGIN), 1)
+
+    def test_failed_instruction_write_leaves_no_tmp_file(self):
+        from unittest import mock
+        with mock.patch("os.replace", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                project.write_instructions(self.proj)
+        self.assertEqual(sorted(p.name for p in self.proj.glob("*.tmp")), [])
 
     def test_missing_instructions(self):
         self.assertEqual(project.missing_instructions(self.proj), [])

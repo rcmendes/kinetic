@@ -134,8 +134,8 @@ class SessionScope(HookCase):
         self.assertEqual(list(self.home.iterdir()), [])
 
     def test_has_mark(self):
-        sys.path.insert(0, str(HOOKS))
-        import _common
+        with mock.patch.object(sys, "path", [str(HOOKS), *sys.path]):
+            import _common
         with mock.patch.dict(os.environ, {"HOME": str(self.home)}):
             self.assertFalse(_common.has_mark({"session_id": "s1"}))
             self.start("s1")
@@ -171,8 +171,8 @@ class SessionScope(HookCase):
         os.utime(f, (t, t))
 
     def sweep(self, proj=None):
-        sys.path.insert(0, str(HOOKS))
-        import _common
+        with mock.patch.object(sys, "path", [str(HOOKS), *sys.path]):
+            import _common
         with mock.patch.dict(os.environ, {"HOME": str(self.home)}):
             _common.sweep_sessions(proj)
 
@@ -918,6 +918,18 @@ class OpenCodeHooks(HookCase):
     def decision(self, out):
         return out.get("decision") if out else None
 
+    def test_skill_tool_is_guarded_in_opencode_shape(self):
+        # OpenCode v2 (probed 2.2.5): tool "skill", the skill name in input.id
+        self.activate()
+        out = self.oc("skill_guard", self.pre("skill", {"id": "superpowers:brainstorming"}))
+        self.assertEqual(out["decision"], "deny")
+        self.assertIn("kinetic run", out["reason"])
+        self.assertNotIn("hookSpecificOutput", out)
+        self.assertIsNone(self.oc("skill_guard", self.pre("skill", {"id": "kntc-run"})))
+        self.assertIsNone(self.oc("skill_guard", self.pre("skill", {"id": "systematic-debugging"})))
+        self.assertIsNone(self.oc("skill_guard", self.pre("skill", {})))
+        self.assertIsNone(self.oc("skill_guard", self.pre("shell", {"command": "ls"})))
+
     def test_edit_outside_is_denied_in_opencode_shape(self):
         self.activate()
         out = self.oc("isolation", self.pre("edit", {"path": "/etc/passwd"}))
@@ -1140,7 +1152,7 @@ class RecordEditAndOrient(HookCase):
 
     def test_hooks_json_wires_skill_guard(self):
         groups = json.loads((HOOKS / "hooks.json").read_text())["hooks"]["PreToolUse"]
-        cmds = [h["command"] for g in groups if g["matcher"] == "Skill" for h in g["hooks"]]
+        cmds = [h["command"] for g in groups if g["matcher"] == "^Skill$" for h in g["hooks"]]
         self.assertEqual(len(cmds), 1)
         self.assertIn("skill_guard.py\" --harness claude", cmds[0])
 
@@ -1247,8 +1259,8 @@ class SkillGuard(HookCase):
             self.assertEqual(self.decision(self.skill(name, cwd=self.run_dir)), "deny", name)
 
     def test_skill_guard_denies_without_next_when_suggest_fails(self):
-        sys.path.insert(0, str(HOOKS))
-        import skill_guard
+        with mock.patch.object(sys, "path", [str(HOOKS), *sys.path]):
+            import skill_guard
         self.activate()
         out = []
         with mock.patch.object(skill_guard._common, "pre_tool", lambda d, r: out.append((d, r))), \
