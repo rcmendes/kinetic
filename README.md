@@ -91,8 +91,8 @@ Optional companions that kinetic uses when present and falls back without: the `
 
 ## Quick start
 
-1. `/kinetic:init ~/code/api ~/code/web` (or `/kinetic:init` alone, from inside a repo or a folder of repos) registers the repos, detects each one's verify command, asks for the tracker (Jira, GitHub, Linear, local or other) and writes `~/.config/kinetic/`. It ends by running doctor.
-2. `/kinetic:run "let partners export statements as CSV"` (or a Jira key, or a path to a spec) starts a run. kinetic picks a lane, says why in one line, and lets you override it.
+1. `/kinetic:start` and talk the idea through: the goal, the repos or systems involved, the links and files that matter. Once the talk has that shape, kinetic asks once "Turn this into a project?". On yes it proposes a name and a folder (never inside a git repo), creates the project folder (`.kinetic/`, `bare-repos/`, `runs/`), writes the conversation's notes and references into the first run's `docs/`, and continues that run at the grill. Nothing is written before the yes.
+2. Inside a project, `/kinetic:run "let partners export statements as CSV"` (or a Jira key, or a path to a spec) starts another run. kinetic picks a lane, says why in one line, and lets you override it. The discover phase clones each repo into `bare-repos/` (or creates it on GitHub, after you confirm owner, name and visibility) and asks for its verify and optional setup commands; the decompose phase asks whether the run publishes to a tracker.
 3. Answer the grill questions, approve the spec, approve the ticket breakdown. From there implementers work in the background; you are asked only when one needs a decision.
 4. Approve the ship gate. kinetic pushes the integration branches and opens one draft PR per repo, in merge order.
 5. The retro presents improvement candidates and drafts a runbook and release notes under the run directory.
@@ -155,7 +155,7 @@ A spec brought in from outside still goes through the spec gate, and tickets bro
 
 ## Example runs
 
-These walk through one run per lane. Repo names, ticket text and commands are illustrative; the phases, gates, ids, branches and paths follow what kinetic does. Each example assumes local tracker mode and `workspace_root` `~/workspace/kinetic-runs`, so the run directory is `~/workspace/kinetic-runs/<run-id>/`.
+These walk through one run per lane. Repo names, ticket text and commands are illustrative; the phases, gates, ids, branches and paths follow what kinetic does. Each example assumes local tracker mode and a project at `~/projects/invoicing`, so the run directory is `~/projects/invoicing/runs/<run-id>/`.
 
 ### Quick lane: one small fix in one repo
 
@@ -198,7 +198,7 @@ Starting from a ticket file instead: `/kinetic:implement ~/notes/fix-dates.md` r
 Here the tracker is Jira, so ticket ids are Jira keys and the run id is `INV-4321`.
 
 1. **Intake.** kinetic reads the Jira issue. It names only `api`, so the repo set is not known yet: provisional `feature` lane, start at the grill.
-2. **Grill, then discover.** The grill settles what the change is and names the interface `StatementClient.export`. Discover asks once: use the saved base folder `~/code`, any other source, and may it search the GitHub org `acme`? It scans `~/code`, and a code search for `StatementClient.export` finds `statement-client` (a library) and `web`. You confirm all three; discover cuts their integration worktrees and sets the lane: "Epic lane: three repos."
+2. **Grill, then discover.** The grill settles what the change is and names the interface `StatementClient.export`. Discover asks once: use the saved base folder `~/code`, any other source, and may it search the GitHub org `acme`? It scans `~/code`, and a code search for `StatementClient.export` finds `statement-client` (a library) and `web`. You confirm all three; discover clones them into the project's `bare-repos/`, asks for their verify commands, cuts their integration worktrees and sets the lane: "Epic lane: three repos."
 3. **Spec.** As in the feature lane, but the spec also covers how the repos interact. It is published as a Jira issue under project `INV`, and its key is noted at the top of `spec.md`. Spec gate.
 4. **Tickets, then breakdown gate.** One slice, with one child ticket per repo, linked with Jira "blocks" links and edge labels:
 
@@ -208,7 +208,7 @@ Here the tracker is Jira, so ticket ids are Jira keys and the run id is `INV-432
    | INV-4323 | api | INV-4322 (`snapshot`) |
    | INV-4324 | web | INV-4323 (`merge`) |
 
-   `INV-4322` produces `StatementClient.export`, which `INV-4323` consumes; `graph validate` would reject the breakdown if `INV-4323` were not blocked by `INV-4322`. The `snapshot` edge is allowed because `statement-client` has `publish_snapshot` and `api` has `pin` in `repos.json`. Without them, the decompose phase would use a `merge` edge. You approve the breakdown and the grant.
+   `INV-4322` produces `StatementClient.export`, which `INV-4323` consumes; `graph validate` would reject the breakdown if `INV-4323` were not blocked by `INV-4322`. The `snapshot` edge is allowed because `statement-client` has `publish_snapshot` and `api` has `pin` in the project config. Without them, the decompose phase would use a `merge` edge. You approve the breakdown and the grant.
 5. **Build.** Each repo has its own integration branch `kinetic/INV-4321/integration`, cut at discover.
    - Round 1: only `INV-4322` is ready. Its implementer adds the client method. After review it merges into `statement-client`'s integration branch, and `kinetic.gitops pin` publishes the snapshot and pins `api` to it.
    - Round 2: `INV-4323` is ready. Its worktree is cut from `api`'s integration branch, which now carries the pin, so the implementer builds against the new client.
@@ -318,7 +318,7 @@ Bodies are written for developers: no lists of files touched, every design decis
 
 ## Trackers
 
-The tracker is where tickets live. Pick it once in `~/.config/kinetic/settings.json` (user level only; a repo cannot switch it) with `/kinetic:init`, or edit the file:
+The tracker is where tickets live. A project has one tracker, kept in `<project>/.kinetic/config.json` (a repo cannot switch it). It is asked at the decompose phase of the first run that publishes to a tracker and written with `kinetic project update`; each run chooses whether it publishes there or keeps its tickets as files in the run folder:
 
 | `tracker` | Needs | Settings |
 |---|---|---|
@@ -331,7 +331,7 @@ The tracker is where tickets live. Pick it once in `~/.config/kinetic/settings.j
 
 Each tracker is one prose file, `trackers/<name>.md`, that tells the skills how to create a ticket, link blockers, set a status and so on in that tracker. No Python talks to a tracker, so adding one means adding one adapter file. Skills use roles, not tracker words: `names.kind.human` (the label or type for a human ticket), `names.edge.merge`, `names.after`, `names.ships_with`, `names.related` and `names.status.<role>`.
 
-To rename any of these for your workspace, override them in `settings.json`:
+To rename any of these for your project, override them in the project config:
 
 ```json
 {
@@ -341,7 +341,7 @@ To rename any of these for your workspace, override them in `settings.json`:
 }
 ```
 
-`tracker_names` is merged key by key over the adapter's defaults; a missing role is an error. The top-level `jira_project`, `slice_issue_type` and `child_issue_type` keys from 0.2.0 are still read. `kinetic tracker resolve` prints what kinetic resolved. kinetic state stays authoritative: remote trackers are written to, never read back.
+`tracker_names` is merged key by key over the adapter's defaults; a missing role is an error. `kinetic tracker resolve` prints what kinetic resolved. kinetic state stays authoritative: remote trackers are written to, never read back.
 
 ### Orbit: tickets on an Orbit Board
 
@@ -386,7 +386,7 @@ In local mode tickets are markdown files under `<run_dir>/issues/`, and `issues/
 
 ## The PR template override
 
-Ship fills one template for every PR. The default is `templates/pr-body.md`. To use your own, set `pr_template` to a file path, in `settings.json` for every repo or in a repo-root `.kinetic.json` for one repo. The first of repo `.kinetic.json`, `settings.json` and the plugin default wins; a relative path resolves against the directory of the file that set it, and a configured file that is missing is an error. `kinetic tracker pr-template --repo <path>` prints the path used. Placeholders are `<<TITLE_KEY>>`, `<<TICKETS>>`, `<<DESCRIPTION>>`, `<<DESIGN_DECISIONS>>`, `<<ARCHITECTURE>>`, `<<ATTENTION_POINTS>>`, `<<MANUAL_STEPS>>`, `<<SHIPS_WITH>>`, `<<RELATED_PRS>>` and `<<DEPENDS_ON>>`; the filled placeholders are kept in `<run_dir>/pr/<repo>.placeholders.md` for the backfill once all PRs exist.
+Ship fills one template for every PR. The default is `templates/pr-body.md`. To use your own, set `pr_template` to a file path, in the project config for every repo or in a repo-root `.kinetic.json` for one repo. The first of repo `.kinetic.json`, the project config and the plugin default wins; a relative path resolves against the directory of the file that set it, and a configured file that is missing is an error. `kinetic tracker pr-template --repo <path>` prints the path used. Placeholders are `<<TITLE_KEY>>`, `<<TICKETS>>`, `<<DESCRIPTION>>`, `<<DESIGN_DECISIONS>>`, `<<ARCHITECTURE>>`, `<<ATTENTION_POINTS>>`, `<<MANUAL_STEPS>>`, `<<SHIPS_WITH>>`, `<<RELATED_PRS>>` and `<<DEPENDS_ON>>`; the filled placeholders are kept in `<run_dir>/pr/<repo>.placeholders.md` for the backfill once all PRs exist.
 
 ## Commands
 
@@ -394,12 +394,12 @@ Ship fills one template for every PR. The default is `templates/pr-body.md`. To 
 |---|---|
 | `/kinetic:run <JIRA-KEY\|idea\|spec-path> [--from build]` | Orchestrates a run end to end, stopping at each gate |
 | `/kinetic:implement <JIRA-KEY\|ticket-file\|spec-path>` | Alias for `run --from build` on an already specified ticket |
-| `/kinetic:init [repo-path ...]` | One-time setup of repos, verify commands, snapshots, tracker; safe to re-run |
+| `/kinetic:start [idea\|ticket-ref]` | Turns a conversation into a project folder on your yes, then starts its first run; inside a project it hands off to `run` |
 | `/kinetic:doctor` | Read-only health check with a one-line fix per failure |
-| `/kinetic:status [run-dir]` | Phase, tickets, frontier and gates of a run (the active one by default) |
-| `/kinetic:ask` | The lanes and the next step `next_step` computes for the active run |
+| `/kinetic:status [run-dir]` | Phase, tickets, frontier and gates of a run (the run of the current folder by default) |
+| `/kinetic:ask` | The lanes and the next step `next_step` computes for the run of the current folder |
 | `/kinetic:cleanup [run-dir]` | Removes the run's local worktrees and branches whose work is merged, after one confirmation |
-| `/kinetic:bare-clone <org>/<name> ... \| <url> <name>` | Makes bare clones in that folder |
+| `/kinetic:bare-clone <org>/<name> ... \| <url> <name>` | Makes bare clones in the project's `bare-repos/` |
 | `/kinetic:bare-refresh [repo ...]` | Fetches into the bare clones and reports what advanced |
 | `/kinetic:catalog-setup [folder]` | Detects and saves the repo catalog folder |
 | `/kinetic:catalog-refresh <keys...> \| --query <q> \| --run <dir>` | Learns repo labels and recipes from merged deliverables; writes only what you approve |
@@ -410,14 +410,15 @@ Ship fills one template for every PR. The default is `templates/pr-body.md`. To 
 |---|---|---|---|
 | `run` | command | sonnet | The orchestrator: lanes, gates, phases, build loop |
 | `implement` | command | sonnet | `run --from build` |
-| `init`, `doctor`, `status`, `ask` | commands | sonnet, haiku, haiku, haiku | Setup and read-only views |
+| `start` | skill | sonnet | Turns a conversation into a project folder on your yes; hands off to `run` |
+| `doctor`, `status`, `ask` | commands | haiku, haiku, haiku | Read-only views |
 | `cleanup` | command | sonnet | Removes merged worktrees and branches of a run |
-| `bare-clone` | command | sonnet | Bare-clones `<org>/<name>` or a URL into that folder |
+| `bare-clone` | command | sonnet | Bare-clones `<org>/<name>` or a URL into the project's `bare-repos/` |
 | `bare-refresh` | command | sonnet | Fetches into the bare clones; local branches never move |
 | `catalog-setup` | command | sonnet | Detects, asks and saves the catalog folder (`catalog_dir`) |
 | `catalog-refresh` | skill | sonnet | Reads merged deliverables, proposes recipes and repo terms, applies what you approve; `cleanup` offers it |
 | `grill` | phase skill | inline | Interview covering threat model and non-functional requirements; keeps the glossary and ADR drafts |
-| `discover` | phase skill | inline | Finds the run's repos from approved sources (base folders, your sources, the GitHub org), confirms them with you, registers them and cuts their worktrees |
+| `discover` | phase skill | inline | Finds the run's repos from approved sources (base folders, your sources, the GitHub org), confirms them with you, clones them into `bare-repos/` (or creates a new one on GitHub), registers them and cuts their worktrees |
 | `specify` | phase skill | inline | Spec with testing decisions, linted by `spec_lint`, published to Jira or `<run_dir>/spec.md` |
 | `decompose` | phase skill | inline | Vertical slices, per-repo tickets, typed edges, validated by `graph validate` |
 | `ship` | phase skill | inline | PR bodies, merge order, draft PR set |
@@ -433,44 +434,50 @@ Phase skills run inline in the orchestrator's session, so their `model:` field h
 
 ## Configuration
 
-All user config lives in `~/.config/kinetic/`; `/kinetic:init` writes it and never writes inside a repo.
-
-`repos.json`, one entry per repo (`verify` is required):
+Project config lives in the project folder, `<project>/.kinetic/config.json`. kinetic writes it only through `kinetic project update` and `kinetic discover register`; it carries `"version": 1`, and a newer version or bad JSON is refused before anything is written. The project folder is found by walking up from the current directory, so a session started anywhere inside it (the project root, a run, a worktree) finds it.
 
 ```json
 {
-  "api": {
-    "path": "/Users/me/code/api",
-    "verify": "mvn -q verify",
-    "publish_snapshot": "mvn -q deploy -DskipTests",
-    "pin": "./scripts/pin-api.sh \"$KINETIC_UPSTREAM_REF\"",
-    "base_branch": "main"
+  "version": 1,
+  "repos": {
+    "api": {
+      "path": "/Users/me/projects/invoicing/bare-repos/api.git",
+      "verify": "mvn -q verify",
+      "verify_ticket": "mvn -q -pl statements verify",
+      "setup": "./scripts/dev-setup.sh",
+      "publish_snapshot": "mvn -q deploy -DskipTests",
+      "pin": "./scripts/pin-api.sh \"$KINETIC_UPSTREAM_REF\"",
+      "base_branch": "main"
+    },
+    "web": {
+      "path": "/Users/me/projects/invoicing/bare-repos/web.git",
+      "verify": "npm test"
+    }
   },
-  "web": {
-    "path": "/Users/me/code/web",
-    "verify": "npm test"
-  }
+  "tracker": "jira",
+  "tracker_settings": { "jira_project": "INV", "slice_issue_type": "Story", "child_issue_type": "Sub-task" }
 }
 ```
 
-- `verify`: the command that proves the repo works; its exit code is the verdict.
+- `path`: the repo's bare clone in `bare-repos/`. Repo names never carry `.git`.
+- `verify`: the command that proves the repo works; its exit code is the verdict. It runs on the integration branch.
+- `verify_ticket`: optional focused command for one ticket, for a repo whose full verify is slow; implementers run it, the full `verify` still gates review and ship.
+- `setup`: optional command run in every new worktree (install dependencies, copy `.env`). A failing setup blocks that ticket and reports its log.
 - `publish_snapshot`: builds and publishes a snapshot other repos can consume.
 - `pin`: runs in the downstream repo and points it at the upstream snapshot; it reads `KINETIC_UPSTREAM_REF`.
-- `base_branch`: the branch PRs target (default `main`).
+- `base_branch`: the branch PRs target (default: the clone's default branch).
+- `tracker`, `tracker_settings`, `tracker_names`, `tracker_description`, `pr_template`: see [Trackers](#trackers) and [The PR template override](#the-pr-template-override).
 
-A repo-root `.kinetic.json` with the same keys overrides the central entry key by key:
+A repo-root `.kinetic.json` with the same repo keys overrides the project entry key by key:
 
 ```json
 { "verify": "make test" }
 ```
 
-`settings.json`:
+Machine-level settings stay in `~/.config/kinetic/settings.json`:
 
 ```json
 {
-  "tracker": "jira",
-  "tracker_settings": { "jira_project": "INV", "slice_issue_type": "Story", "child_issue_type": "Sub-task" },
-  "workspace_root": "~/workspace/kinetic-runs",
   "repo_roots": ["/Users/me/code"],
   "github_orgs": ["acme"],
   "catalog_dir": "/Users/me/code/team-docs/repo-catalog"
@@ -481,25 +488,31 @@ A repo-root `.kinetic.json` with the same keys overrides the central entry key b
 
 `catalog_dir` is the repo catalog folder; `/kinetic:catalog-setup` writes it. Unset means no catalog anywhere. It holds `index.md` (generated), `terms.md` (the controlled vocabulary), `repos/<repo>.md` (domain terms per repo, with the deliverables behind each), `recipes/<slug>.md` (one kind of change, its parameters, and per repo what it is needed for, with a strength: always, usually, sometimes or seen once) and `ledger.json` (deliverables already cataloged). `/kinetic:catalog-refresh` fills it through `kinetic catalog apply` after you approve each recipe; `discover` reads it as its first source. Put it inside a git checkout to share it with a team; kinetic never commits it.
 
-The 0.2.0 top-level `jira_project`, `slice_issue_type` and `child_issue_type` keys are still read. With `"tracker": "local"` (or no `tracker` key) tickets are files under `<run_dir>/issues/`. See [Trackers](#trackers) for the other trackers, `tracker_settings` and `tracker_names`, and [The PR template override](#the-pr-template-override) for `pr_template`.
+With `"tracker": "local"` (or no `tracker` key) tickets are files under `<run_dir>/issues/`. See [Trackers](#trackers) for the other trackers, `tracker_settings` and `tracker_names`, and [The PR template override](#the-pr-template-override) for `pr_template`.
 
 ## Where state lives
 
 ```text
-<workspace_root>/<run-id>/
-  state.json            run state (flock-guarded, written atomically)
-  spec.md               the spec (local mode, or a copy noting the Jira key)
-  discovery.md          repos chosen by discover, with reasons and sources
-  docs/                 GLOSSARY.md, adr/, runbook.md, release-notes.md
-  issues/<id>.md        ticket files (local mode, quick lane, fix tickets)
-  reports/<id>.md       implementer reports (and <id>-fix-N.md)
-  reviews/<id>-<axis>.md  reviewer findings
-  logs/                 verify logs
-  pr/<repo>.md          PR bodies
-  worktrees/<repo>      integration worktree per repo
-  worktrees/<repo>-<id> ticket worktree per ticket
-~/.config/kinetic/active-run   absolute path of the active run dir; absent means no run
+<project>/
+  .kinetic/config.json  project config: repos, verify and setup commands, tracker, names, pr_template
+  .kinetic/sessions/    which session is bound to which run
+  bare-repos/<repo>.git bare clone per repo; every worktree is cut from it
+  runs/<run-id>/        one folder per run (<run_dir>):
+    spec.md               the spec (local mode, or a copy noting the Jira key)
+    discovery.md          repos chosen by discover, with reasons and sources
+    docs/                 notes.md and refs/ from /kinetic:start, GLOSSARY.md, adr/, runbook.md, release-notes.md
+    issues/<id>.md        ticket files (local mode, quick lane, fix tickets)
+    reviews/<id>-<axis>.md  reviewer findings
+    needs-human/<id>-<N>.md the implementer report that raised a human ticket
+    pr/<repo>.md          PR bodies
+    worktrees/<repo>      integration worktree per repo
+    worktrees/<repo>-<id> ticket worktree per ticket
+    .kinetic/             bookkeeping: state.json (flock-guarded, written atomically),
+                          reports/<id>.md (implementer reports), logs/ (verify and setup logs),
+                          tickets.staged.json (tickets staged for publishing)
 ```
+
+The active run is the run of the current directory (the run folder or any worktree in it). There is no global pointer, so two runs, in one project or in two, work at once. From the project root, `kinetic project runs` lists the open runs.
 
 `kinetic state load --run <run_dir>` prints the whole state: lane, phase, tickets, slices, repos, gates, rulings, verify results and the owning session.
 
@@ -512,22 +525,22 @@ The 0.2.0 top-level `jira_project`, `slice_issue_type` and `child_issue_type` ke
 | `confirm_write_ops` | PreToolUse on Bash and GitHub/Jira MCP writes | Denies `git push` to `main`, `master` or `Release*`; asks before other pushes, `gh pr create|merge|edit|ready` and Jira or GitHub MCP write calls |
 | `confirm_deploy` | PreToolUse on deploy and Tekton-trigger MCP calls | Asks first |
 | `record_edit` | PostToolUse on file writes | Records edits so the Stop gate can compare them with verifies |
-| `claim_run` | PostToolUse on Bash | Records the session that wrote the active-run pointer as the run's owner |
+| `claim_run` | PostToolUse on Bash | Records the session that ran `kinetic project use-run --run <run_dir>` as the run's owner |
 | `orient` | SessionStart | Tells a new session about the active run and the next step |
 
 The run-scoped hooks (isolation, record_edit, completion_gate) act only in the session that owns the run and on calls whose working directory is inside the run directory, so other Claude sessions on the machine are unaffected. The push and deploy hooks always apply.
 
 ## Recovery and troubleshooting
 
-- **Resume after a crash or in a new session.** Run `/kinetic:run` again. It finds the active run, rewrites the pointer (which claims the run for the new session), and resumes at the recorded phase. Recorded gates stay approved. For a ticket still `running` with no report, kinetic shows what its worktree holds and asks whether to re-dispatch an implementer there or set it back to `todo`.
+- **Resume after a crash or in a new session.** Run `/kinetic:run` again from the run folder (or pick the run from the list it shows at the project root). It binds the run with `kinetic project use-run` (which claims it for the new session) and resumes at the recorded phase. Recorded gates stay approved. For a ticket still `running` with no report, kinetic shows what its worktree holds and asks whether to re-dispatch an implementer there or set it back to `todo`.
 - **A crash during a fix round.** Recovery cannot yet tell a dead fix agent from a finished first round; check the report's latest `## Fix round` section and `<run_dir>/reviews/<id>-fix-N.md` by hand.
-- **`set-ticket` refuses `done`.** The ticket has no passing verify newer than its last edit. Re-run verify in its worktree (`kinetic verify --run <run_dir> --repo-name <repo> --repo-path <worktree> --ticket <id>`) or resume the implementer.
+- **`set-ticket` refuses `done`.** The ticket has no passing verify newer than its last edit. Re-run verify in its worktree (`kinetic verify --run <run_dir> --repo-name <repo> --repo-path <worktree> --ticket <id> --scope ticket`) or resume the implementer.
 - **Clean up after merge.** The retro offers to remove ticket and integration worktrees and branches whose PRs merged, listing them and asking first. It never force-removes and never deletes the run directory.
-- **Abandon a run.** `rm -f ~/.config/kinetic/active-run`. The run directory stays for reference.
+- **Abandon a run.** Stop working on it. The run directory stays for reference; `kinetic project runs` keeps listing it until its phase is `done`.
 - **A hook denied something.** A denial is final for that action. Read the reason: an isolation denial names the allowed roots; a push denial means the target is a protected branch.
-- **`/kinetic:init` is denied writing config.** You are in the session that owns the active run; run it from another session.
+- **"no kinetic project here".** The command ran outside a project folder (it exits 2). Start one with `/kinetic:start`, or `cd` into the project.
 - **The run is stalled.** The frontier is empty with tickets still `todo`. kinetic shows the waiting edges; usually a `snapshot` edge between repos without `publish_snapshot`/`pin`, or a `release` edge nobody has marked. Mark a release with `kinetic state set-ticket --run <run_dir> --id <upstream-id> --field status=released`.
-- **Doctor checks:** `git` and `gh` on PATH, `gh auth status`, a readable `repos.json`, a resolvable verify command per repo, the optional companion skills and plugins, and a reminder to check the Atlassian MCP with `/mcp`.
+- **Doctor checks:** `git` and `gh` on PATH, `gh auth status`, inside a project a readable project config and a resolvable verify command per repo (outside a project only the machine checks run), the optional companion skills and plugins, and a reminder to check the Atlassian MCP with `/mcp`.
 
 **Upgrading an existing Claude Code install:** skills, agents and hooks now call `kinetic ...` instead of `PYTHONPATH=${CLAUDE_PLUGIN_ROOT}/scripts python3 -m kinetic.*`. After updating, run `<clone>/bin/kinetic install --harness claude` once; until then `doctor` warns and skills fall back to `python3 <plugin-root>/bin/kinetic`.
 
@@ -556,12 +569,13 @@ docs/                        comparison, design spec, implementation plan, rulin
 
 | Module | Responsibility |
 |---|---|
+| `project.py` | Finds the project folder from any directory under it, creates it, updates its config, lists runs and binds a session to a run |
 | `state.py` | Run state: init, phase, slices, tickets, repos, gates, rulings, verify and edit stamps, owner session; flock-guarded atomic writes; CLI (whose `set-ticket` refuses `done` without a passing, current verify) |
 | `graph.py` | Validates the ticket graph (missing repo except on human tickets, edge types, unknown blockers, unused slices, cycles, consumers without an edge to their producer, unknown or contradicting `after`/`related`, lone `ships_with` groups; unproduced interfaces as warnings) and gives a topological order that honours `after` |
 | `frontier.py` | Ready tickets (never human): satisfied blockers, the cap of 3 running, one per repo; `waiting_on_you` and `only_human_left` for human tickets |
 | `gitops.py` | `worktree`, `merge` (ticket into integration), `merge-order` across repos (ships-with neighbours kept together), `ships-with` groups, `pin` downstream repos to a snapshot, `status-hash` and `assert-unchanged` (reviewer read-only check) |
-| `verify.py` | Runs a repo's verify command, logs it and records the result in state |
-| `config.py` | Resolves a repo's config from `repos.json` and `.kinetic.json` |
+| `verify.py` | Runs a repo's verify command (`--scope ticket` uses `verify_ticket` when set), logs it and records the result in state |
+| `config.py` | Resolves a repo's config from the project config and `.kinetic.json` |
 | `detect_repos.py` | Proposes a verify command from build markers (Maven, Gradle, npm, Go, Cargo, pyproject, Makefile) |
 | `tracker.py` | Resolves the tracker adapter, its settings and role names, and the PR template path |
 | `ticket_store.py` | The ticket store interface and the local ticket store (tickets in `state.json`) |
@@ -582,7 +596,7 @@ The suite covers every script module and every hook, plus an end-to-end test tha
 
 ## Status and known limitations
 
-kinetic is at 0.4.0 (see `.claude-plugin/plugin.json`); 0.4.0 adds the discover phase (repos found from approved sources, worktrees cut at discover, repos read-only until the breakdown gate) and `/kinetic:init` from the current directory; 0.3.0 adds trackers, human tickets, relationship types, the local board and the PR template override, and 0.3.1 corrects the hook wording, flags unmerged agent tickets at ship, and keeps file modes on atomic writes. The scripts and hooks are tested; the skills and agents have not yet been exercised in a live end-to-end run. `docs/plan/kinetic-v0-rulings.md` records every decision made while building it and the v0.2 backlog.
+kinetic is at 0.4.0 (see `.claude-plugin/plugin.json`); 0.4.0 adds the discover phase (repos found from approved sources, worktrees cut at discover, repos read-only until the breakdown gate); 0.3.0 adds trackers, human tickets, relationship types, the local board and the PR template override, and 0.3.1 corrects the hook wording, flags unmerged agent tickets at ship, and keeps file modes on atomic writes. The scripts and hooks are tested; the skills and agents have not yet been exercised in a live end-to-end run. `docs/plan/kinetic-v0-rulings.md` records every decision made while building it and the v0.2 backlog.
 
 Not yet verified in a live session:
 

@@ -1,16 +1,16 @@
 ---
 name: discover
-description: Settle which repos a kinetic run touches. Asks the user once where to look (base folders of checkouts, other sources, the GitHub org), searches them, confirms the list with the user, registers new repos and cuts each repo's integration worktree. Use at the discover phase of a kinetic run.
+description: Settle which repos a kinetic run touches. Asks the user once where to look (base folders of checkouts, other sources, the GitHub org), searches them, confirms the list with the user, clones new repos into the project's bare-repos folder (or creates them on GitHub), registers them and cuts each repo's integration worktree. Use at the discover phase of a kinetic run.
 model: sonnet
 ---
 
 # Discover
 
-Find the repos this run touches, get the user to confirm them, and make each one usable: registered in `repos.json`, with its integration worktree under the run directory. This skill never invokes another skill.
+Find the repos this run touches, get the user to confirm them, and make each one usable: a bare clone in `<project>/bare-repos/`, registered in the project config (`<project>/.kinetic/config.json`), with its integration worktree under the run directory. `<project>` is what `kinetic project find` prints. This skill never invokes another skill.
 
 The orchestrator passes:
 
-- `Run: <run_dir>` (the run directory, `<workspace>/<run-id>/`) and the ref;
+- `Run: <run_dir>` (the run directory, `<project>/runs/<run-id>/`) and the ref;
 - `Candidates:` the repos known so far, each with where it came from (the ref text, the tracker issue, the repo `/kinetic:run` was started from, the grill), or none;
 - `Spec:` the spec location, if there is one;
 - `Mode: full` or `Mode: confirm-only` (tickets already in hand, or a repo added later by the decompose phase).
@@ -19,24 +19,24 @@ Run scripts as `kinetic <module> ...`. Ask the user with the harness's question 
 
 Each step below is either **agent** (you work alone and ask nothing) or **you** (the user answers). On a **you** step, never answer for the user, never guess their answer, and ask every question of that step in one message.
 
-Never write `~/.config/kinetic/` files with the edit tools: the isolation hook denies them during a run. Config changes go only through `kinetic discover remember` and `kinetic discover register`. The only network calls are the step 4 GitHub calls, made with the user's permission, and fetching bare clones that match a candidate, which the saved bare folder already covers. Reading any other source, the catalog included, sends nothing off the machine.
+Never write `<project>/.kinetic/` or `~/.config/kinetic/` files with the edit tools: the isolation hook denies them during a run. Config changes go only through `kinetic discover remember` (machine-level `repo_roots` and `github_orgs`) and `kinetic discover register` (the project's repos). The network calls are the step 4 GitHub calls, made with the user's permission; fetching the project's own bare clones that match a candidate, which needs no permission; and the clones and GitHub creates of step 7, made only on the user's yes. Reading any other source, the catalog included, sends nothing off the machine.
 
 ## Mode: confirm-only
 
-Skip steps 2 to 6 and run step 7 on the candidates. A candidate known only by name that is not in `~/.config/kinetic/repos.json`: run `kinetic discover settings`, then `kinetic discover scan --root <each repo_root>`, and match by directory name, then by the repo name at the end of the remote URL. When `kinetic bare show` exits 0, also match against `kinetic bare list`. A repo found both in a base folder and in the bare folder counts as one match: the bare clone (a repo registered in `repos.json` keeps its registered path). One match: use it. None or several: ask the user for the path, in the same message as any verify question from step 7. Before step 7's worktrees, refresh every confirmed repo that has a bare clone (step 7.4).
+Skip steps 2 to 6 and run step 7 on the candidates. A candidate known only by name that is not under `repos` in the project config: match it against `kinetic bare list` (the project's bare clones), then run `kinetic discover settings` and `kinetic discover scan --root <each repo_root>`, and match by directory name, then by the repo name at the end of the remote URL. A repo found both in a base folder and in `bare-repos/` counts as one match: the bare clone. A match in a base folder only is cloned from its remote in step 7.1; a checkout is never registered in place. One match: use it. None or several: ask the user for the GitHub `<org>/<name>` or URL, in the same message as any verify question from step 7; a repo that does not exist yet goes to step 7.2. Before step 7's worktrees, refresh every confirmed repo (step 7.5).
 
 ## Mode: full
 
 ### 1. Is the set already clear? (agent)
 
-The set is clear when every candidate is registered in `repos.json`, came from a known place (named in the ref text, named by the tracker issue, the registered repo the run was started from, or confirmed by the user in the grill), and nothing in the grill notes (`<run_dir>/docs/`) or the spec names a component that no candidate owns.
+The set is clear when every candidate is registered in the project config, came from a known place (named in the ref text, named by the tracker issue, the registered repo the run was started from, or confirmed by the user in the grill), and nothing in the grill notes (`<run_dir>/docs/`) or the spec names a component that no candidate owns.
 
 Clear: print one line, for example `Repos: api, web (from the grill)`, and go to step 7. Not clear: continue.
 
 ### 2. Look for base folders on your own (agent)
 
 - `kinetic discover settings` prints the saved `repo_roots` and `github_orgs`.
-- `kinetic bare show` prints the saved bare folder and exits 1 when none is saved. Exit 0 means the bare folder is set: every bare-clone step below applies, and step 3 never asks about it. Exit 1 means none of them apply.
+- `kinetic bare list` lists the project's bare clones in `<project>/bare-repos/` with name, path, remote and `default_branch`. Step 3 never asks about them.
 - Read the instruction files the harness loads (the user-level and project-level `CLAUDE.md` and `AGENTS.md`) and the README and `AGENTS.md` of each candidate repo. Look for a folder where the user keeps checkouts, and for a GitHub organization name. Note where you found each.
 
 ### 3. Ask once (you)
@@ -54,7 +54,7 @@ Save the approved folders and orgs right away: `kinetic discover remember --root
 Search every approved source, asking nothing:
 
 - **Catalog.** Only when `kinetic catalog show` exits 0 (it prints the catalog folder). Local files: no permission needed, nothing leaves the machine. Read `<catalog>/index.md` and match the run's scope (the ref, grill notes, spec, glossary terms) against each recipe's when-to-use text and each repo's terms; open the matching `recipes/<slug>.md` files. A recipe repo marked **always** is strong, **usually** is medium, **sometimes** or **seen once** is weak; a repo matched only by its terms is medium at most. The reason line names the recipe, e.g. `recipe onboard-asset-class-warehouse-pledge: always (3 of 3)`. Keep each approved repo's what-for lines for `discovery.md`. A catalog match never skips step 6, and it never makes step 1's set clear on its own.
-- **Bare clones.** Only when `kinetic bare show` exited 0. `kinetic bare list` lists the clones with name, path, remote and `default_branch`. Match them like base folders, reading the README with `git -C <clone> show origin/<default_branch>:README.md`. For every candidate that matches a bare clone, run `kinetic bare refresh --name <n> ...` (repeat `--name`) before reading its contents; with no matching names skip the command, and never run it without `--name`, which fetches every clone in the folder. Ask nothing: the saved bare folder is the user's consent. The command prints `{"results": [{name, ok, advanced, error}]}` and exits 1 when any fetch failed. A failure does not stop this step; keep its `error` for step 6. A repo registered in `repos.json` at a normal checkout keeps that path even when a bare clone also exists; an unregistered repo found both in a base folder and in the bare folder uses the bare clone.
+- **Bare clones.** The project's clones from `kinetic bare list`. Match them like base folders, reading the README with `git -C <clone> show origin/<default_branch>:README.md`. For every candidate that matches a bare clone, run `kinetic bare refresh --name <n> ...` (repeat `--name`) before reading its contents; with no matching names skip the command, and never run it without `--name`, which fetches every clone in the folder. Ask nothing: the clones belong to the project. The command prints `{"results": [{name, ok, advanced, error}]}` and exits 1 when any fetch failed. A failure does not stop this step; keep its `error` for step 6. A repo found both in a base folder and in `bare-repos/` uses the bare clone.
 - **Base folders.** `kinetic discover scan --root <path> ...` lists the git repos one level deep, with name, path, remote and whether each is registered. Match them against the ref, the grill notes, the glossary terms and the interfaces named so far, using the repo name, the first lines of its README and its remote.
 - **Other sources.** Read what the user named (files, or URLs they gave, with the harness's fetch tool) and pull out repo names.
 - **GitHub.** `gh repo list <org> --json name,description,repositoryTopics,url --limit 1000` for names and descriptions. For each interface the grill or spec names (an endpoint, a client method, an event, a schema), `gh search code --owner <org> "<interface name>"`: a hit is the strongest sign that a repo produces or consumes it. Search at most 10 interfaces, the ones the run produces or consumes first.
@@ -81,7 +81,7 @@ At most two follow-up rounds. After the second, go to step 6 with what you have 
 
 One message, in two groups:
 
-- **Candidates:** name, reason, source, confidence, and where it is: `registered`, `on disk, not registered`, `bare clone`, `bare clone, not refreshed: <error>` (the refresh failed; its contents may be out of date), or `GitHub only, not cloned`.
+- **Candidates:** name, reason, source, confidence, and where it is: `registered`, `bare clone, not registered`, `bare clone, not refreshed: <error>` (the refresh failed; its contents may be out of date), `on disk at <path>, not in the project`, `GitHub only, not cloned`, or `not found` (a new repo, or one the user must name).
 - **Suspected, unconfirmed:** the weak matches, for the user to add or ignore.
 
 Always name a repo; never show only a path or URL. The user edits and approves the list. Record the approval as a ruling:
@@ -94,15 +94,17 @@ kinetic state add-ruling --run <run_dir> --what "repos: <names>" --why "<one rea
 
 Ask the questions of this step together, in one message, and only those that apply.
 
-1. **GitHub only, not cloned.** One question for all of them: "Clone them into <first repo_root>?" (recommended) or "I'll clone them myself". With no saved repo root, the same question asks where to clone. On yes: `gh repo clone <org>/<name> <root>/<name>` for each. With a bare folder (`kinetic bare show` exited 0), the question is "Clone them into <bare_dir>?" and the action is `kinetic bare clone --repo <org>/<name>` for each; without a bare folder, this item is unchanged. On "I'll clone them": with a bare folder, print the `kinetic bare clone --repo <org>/<name>` commands and, once the user is done, recheck with `kinetic bare list` (a rescan never sees the bare folder); without one, print the clone commands, wait for the user to say they are done, then rescan with `kinetic discover scan`.
-2. **On disk, not registered.** `kinetic detect_repos <path> ...` proposes each verify command. Ask for the command of every repo whose verify is null, in one message. Then, for each: `kinetic discover register --name <name> --path <clone path> --verify "<cmd>"`. A bare clone is registered under its bare path.
-3. **Lane.** Mode full only, and only when the lane is not `quick`: one repo is `feature`, two or more is `epic`: `kinetic state set-lane --run <run_dir> --lane <lane>`.
-4. **Worktrees.** If not already run in this skill, run `kinetic bare show`, and when it exits 0, `kinetic bare list`: they tell which repos are bare clones and their `default_branch`. First, refresh every confirmed bare-clone repo that was not refreshed earlier in this run of the skill: `kinetic bare refresh --name <n> ...` (skip it when there are none; never run it without `--name`), asking nothing; a failure does not stop the step and is reported with the result. Then, for each repo not yet in `state.repos` (read it with `kinetic state load --run <run_dir>`): find its base branch (`base_branch` in its repo config, default `main`). For a repo registered at a bare clone, the base branch is `base_branch` from its `repos.json` entry, else the clone's `default_branch` from `kinetic bare list`, never the literal `main`. Then:
+1. **Not in the project yet** (GitHub only, or on disk at a checkout). One question for all of them: "Clone them into the project's bare-repos?" (recommended) or "I'll clone them myself". On yes: `kinetic bare clone --repo <org>/<name>` for a GitHub repo, and `kinetic bare clone --url <its origin URL> --name <name>` for a checkout (`git -C <checkout> remote get-url origin`; a checkout with no remote is not supported, so ask for the URL). On "I'll clone them": print those commands, wait for the user to say they are done, then recheck with `kinetic bare list`. Repo names never carry `.git`.
+2. **Not found.** For each repo that does not exist yet or that the user could not place, ask: "Create it on GitHub, or give me the URL of one already created?" Offer create only when `kinetic bare gh-ready` prints `{"ready": true}`; otherwise ask only for the URL and say that `gh` is missing or not logged in. URL: `kinetic bare clone --url <url> --name <name>`. Create: confirm the owner, the name and the visibility (`private`, `internal` or `public`; recommend `private`) in one question, and only on the user's yes run `kinetic bare create --owner <owner> --name <name> --visibility <visibility>`. It creates the repo with a README, so the base branch exists, then clones it into `bare-repos/`.
+3. **Bare clone, not registered.** `kinetic detect_repos <clone path> ...` proposes each verify command. In one message ask, per repo: the verify command when it is null (confirm it when it looks unusual); an optional focused verify for one ticket, for a repo whose full verify is slow; an optional setup command run in every new worktree (install dependencies, copy `.env`); and, only for a repo that publishes snapshot builds other repos consume, the `publish_snapshot` command and the downstream `pin` command (it reads `KINETIC_UPSTREAM_REF`). Never guess a command. Then, for each: `kinetic discover register --name <name> --path <clone path> --verify "<cmd>"`, adding `--verify-ticket "<cmd>"`, `--setup "<cmd>"`, `--publish-snapshot "<cmd>"` and `--pin "<cmd>"` only when given. A repo is always registered at its bare clone.
+4. **Lane.** Mode full only, and only when the lane is not `quick`: one repo is `feature`, two or more is `epic`: `kinetic state set-lane --run <run_dir> --lane <lane>`.
+5. **Worktrees.** Run `kinetic bare list` for each clone's path and `default_branch`. First, refresh every confirmed repo that was not refreshed earlier in this run of the skill: `kinetic bare refresh --name <n> ...` (skip it when there are none; never run it without `--name`), asking nothing; a failure does not stop the step and is reported with the result. Then, for each repo not yet in `state.repos` (read it with `kinetic state load --run <run_dir>`): its base branch is `base_branch` in its project config entry, else the clone's `default_branch`, never the literal `main`. Then:
    - `kinetic gitops worktree --repo <clone path> --dest <run_dir>/worktrees/<repo> --branch kinetic/<run-id>/integration --base <base>`
+   - `kinetic gitops setup --run <run_dir> --repo-name <repo> --path <run_dir>/worktrees/<repo>`: it runs the repo's `setup` command, if any. Exit 1 means setup failed: show the user the `log_path` from its JSON and ask how to go on; never continue past it silently.
    - `kinetic state set-repo --run <run_dir> --name <repo> --path <run_dir>/worktrees/<repo> --integration-branch kinetic/<run-id>/integration`
 
    A repo already in state keeps its worktree. The integration branch is never just `kinetic/<run-id>`: git cannot hold both that and `kinetic/<run-id>/<id>`.
-5. **Record.** Write or update `<run_dir>/discovery.md` with:
+6. **Record.** Write or update `<run_dir>/discovery.md` with:
    - the sources used, and the ones the user declined;
    - the approved repos with their reasons and sources, and, for a repo a catalog recipe matched, that recipe's what-for lines;
    - the suspected repos the user did not take;
@@ -113,6 +115,7 @@ Ask the questions of this step together, in one message, and only those that app
 ## Rules
 
 - Never add a repo to the run that the user has not seen with its reason.
-- Never clone, search GitHub, or read a source the user did not approve. Fetching a bare clone that matches a candidate is approved by the saved bare folder.
+- Never clone, search GitHub, or read a source the user did not approve. Fetching the project's own bare clone that matches a candidate needs no approval.
+- Never create a GitHub repo without the user's yes on its owner, name and visibility.
 - One message per **you** step; never one question per source or per repo.
 - Never loop past two follow-up rounds.

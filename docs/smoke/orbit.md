@@ -6,7 +6,7 @@ date, `orbit --version`, and pass/fail per step at the bottom.
 
 ## Setup
 
-1. A scratch repo with a verify command, registered with `/kinetic:init`.
+1. A scratch kinetic project (`/kinetic:start`) with one repo and its verify command registered by discover.
 2. `orbit init` in that repo; add `"kinetic"` to `non_ready_labels` in the
    Board's `config.toml`.
 3. `~/.config/kinetic/settings.json`: `{"tracker": "orbit"}` (add

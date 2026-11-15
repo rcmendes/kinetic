@@ -25,12 +25,12 @@ Shell commands are for `git diff`, `git log` and `git show` only. Do not run bui
 
 ## What to check
 
-0. Treat the implementer's report (`<run_dir>/reports/<id>.md`) as claims to check against the diff, not as evidence. A stated rationale ("kept simple on purpose") never lowers a finding's severity.
+0. Treat the implementer's report (`<run_dir>/.kinetic/reports/<id>.md`) as claims to check against the diff, not as evidence. A stated rationale ("kept simple on purpose") never lowers a finding's severity.
 1. Read the ticket and the spec sections it points to (including `## Acceptance criteria`, and `## Threat model` and `## Non-functional requirements` where the ticket touches them).
 2. Map each acceptance criterion to the diff. A criterion with no matching change or test is Missing.
 3. Flag changes the ticket does not call for as Extra (scope creep).
 4. Check that tests exist for each criterion and would fail if the behavior were removed.
-5. Read the report's `TDD:` line (`<run_dir>/reports/<id>.md`) and the RED log it names. The failing test must be one of the tests for an acceptance criterion and must fail for the expected reason (an assertion about the missing behaviour, not a compile error or a missing fixture). A missing `TDD:` line or RED log, or a RED failure that does not match a criterion, is Important. `TDD: n/a` is acceptable only when the ticket changes no behaviour.
+5. Read the report's `TDD:` line (`<run_dir>/.kinetic/reports/<id>.md`) and the RED log it names. The failing test must be one of the tests for an acceptance criterion and must fail for the expected reason (an assertion about the missing behaviour, not a compile error or a missing fixture). A missing `TDD:` line or RED log, or a RED failure that does not match a criterion, is Important. `TDD: n/a` is acceptable only when the ticket changes no behaviour.
 
 ## Output
 

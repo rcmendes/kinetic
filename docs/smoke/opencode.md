@@ -129,7 +129,7 @@ every harness (`kinetic state set-phase --phase ship` and
 
 ## 8. Context / orientation injection
 
-- Start a session while a run is active (active-run pointer set).
+- Start a session inside a run folder of a kinetic project.
 - Expect: within the first model call the system prompt gains the
   orientation lines (`kinetic run …`, `lane`, `phase`, `next`, `why`),
   refreshed about once a minute.

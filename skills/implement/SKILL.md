@@ -16,7 +16,7 @@ Alias for `/kinetic:run <ref> --from build`, with a pre-check. Do not reimplemen
 Load it: a tracker reference through the adapter's "fetch" operation (resolve the tracker with `kinetic tracker resolve` and read the adapter file it names), otherwise read the ticket or spec file. It needs both:
 
 - **Acceptance criteria**: a `- [ ]` checklist or an "Acceptance criteria" section.
-- **A repo**: a `Repo:` line, a repo field, or exactly one repo registered in `~/.config/kinetic/repos.json`.
+- **A repo**: a `Repo:` line, a repo field, or exactly one repo under `repos` in the project config (`<project>/.kinetic/config.json`, `<project>` from `kinetic project find`; exit 2 means no project: point to `/kinetic:start` and stop).
 
 If either is missing, say which one and stop: "Not ready to build. Run `/kinetic:run <ref>` so it can grill, spec or detect the repo first."
 

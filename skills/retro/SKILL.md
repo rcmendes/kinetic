@@ -8,7 +8,7 @@ model: sonnet
 
 Conduct a **retrospective** on the run. You are suggesting improvements to the coding agent's **environment** to improve future runs, and drafting the operational docs the run owes. This skill never invokes another skill.
 
-The orchestrator passes `Run: <dir>` (the run directory, `<workspace>/<run-id>/`). Run scripts as `kinetic <module> ...`.
+The orchestrator passes `Run: <dir>` (the run directory, `<project>/runs/<run-id>/`). Run scripts as `kinetic <module> ...`.
 
 ## Writing style for steering files
 
@@ -16,7 +16,7 @@ Anything you propose to put in a steering file (the repo's instruction file, see
 
 ## Steps
 
-1. Read the primary sources: `kinetic state load --run <dir>` (tickets, rulings, verify results, gates), `<run_dir>/reports/`, the spec, and the session logs on this machine if the user points at them. Default to the current session.
+1. Read the primary sources: `kinetic state load --run <dir>` (tickets, rulings, verify results, gates), `<run_dir>/.kinetic/reports/`, the spec, and the session logs on this machine if the user points at them. Default to the current session.
 
 2. Look for candidates for improvement in these categories.
 

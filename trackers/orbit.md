@@ -1,12 +1,12 @@
 # Tracker adapter: Orbit
 
-Access: the `orbit` CLI, always with `--json` and `--dir <anchor>`. Optional setting: `orbit_dir` (`tracker_settings.orbit_dir`), the Board anchor or Board folder, for when the Board cannot be found from the run's first repo. The Orbit Board needs `names.hold` (default `kinetic`) in `non_ready_labels` in its `config.toml`; doctor checks it.
+Access: the `orbit` CLI, always with `--json` and `--dir <anchor>`. Optional setting: `orbit_dir` (`tracker_settings.orbit_dir`), the Board anchor or Board folder. Without it the anchor is the project folder (the one holding `.kinetic/`, `bare-repos/` and `runs/`). The Orbit Board needs `names.hold` (default `kinetic`) in `non_ready_labels` in its `config.toml`; doctor checks it.
 
 With this tracker the run's tickets live on the Orbit Board: the Orbit ticket store reads and writes them, and kinetic state is not a separate copy. This adapter publishes staged tickets: during decompose, follow the Local steps (ticket files and `NN-<repo>-<slug>` ids); when the breakdown gate is approved, kinetic publishes every staged ticket in one `orbit batch`, and from then on a ticket id is its Orbit Task ID.
 
 Never edit Orbit Task files by hand, and never run `orbit ready --claim` for a kinetic ticket: kinetic schedules its own tickets.
 
-A run whose ref is an existing Orbit Task (for example `/kinetic:implement orb-a7b2c9`) does not take that Task over: kinetic files its own slice and tickets for the run, and the original Task stays as the request. Link it from the tickets with `related` (or a comment) and close it yourself when the run ships.
+A run whose ref is an existing Orbit Task (for example `/kinetic:implement orb-a7b2c9`) does not take that Task over: kinetic never claims it, never moves its status and never closes it; the user does. Its only write to that Task is one comment naming the run folder. Orbit cannot nest the slices under it (a Parent Task of type `epic` is top-level only, and SubTasks are one level deep), so kinetic files its own slices and tickets for the run, and links the tickets to the original Task with `related`.
 
 After the breakdown gate, a ticket kinetic adds later (a `NEEDS_HUMAN` ticket, a review fix) goes to the Board in the same write that records it, and its provisional id keeps working with `kinetic state` commands.
 
