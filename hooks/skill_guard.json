@@ -1,0 +1,19 @@
+{
+  "deny": [
+    "superpowers:brainstorming",
+    "superpowers:writing-plans",
+    "superpowers:executing-plans",
+    "superpowers:subagent-driven-development",
+    "superpowers:using-git-worktrees",
+    "superpowers:finishing-a-development-branch",
+    "to-spec", "mattpocock-skills:to-spec",
+    "to-tickets", "mattpocock-skills:to-tickets",
+    "implement", "mattpocock-skills:implement",
+    "implement-spec", "mattpocock-skills:implement-spec",
+    "wayfinder", "mattpocock-skills:wayfinder",
+    "grill-with-docs", "mattpocock-skills:grill-with-docs",
+    "grilling", "mattpocock-skills:grilling",
+    "grill-me", "mattpocock-skills:grill-me",
+    "triage", "mattpocock-skills:triage"
+  ]
+}

@@ -64,7 +64,18 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(p["skill_dirs"], ["~/.agents/skills"])
         self.assertEqual(p["agent_dirs"], ["~/.codex/agents"])
         self.assertIn("/hooks", p["hooks"]["trust"])
-        self.assertEqual(harness.instructed(p), [])
+        self.assertEqual(harness.instructed(p), ["skill-ownership"])
+
+    def test_skill_ownership_enforced_only_on_claude(self):
+        self.assertIn("skill-ownership", harness.GUARANTEES)
+        for hid in harness.HARNESS_IDS:
+            p = harness.profile(hid)
+            self.assertEqual("skill-ownership" in p["enforced"], hid == "claude", hid)
+            self.assertEqual(p["tools"]["skill"], "Skill" if hid == "claude" else None, hid)
+
+    def test_render_names_skill_tool(self):
+        self.assertIn("patch=none skill=Skill\n", harness.render(harness.profile("claude")))
+        self.assertIn("patch=apply_patch skill=none\n", harness.render(harness.profile("codex")))
 
     def test_opencode_verify_gate_is_instructed(self):
         p = harness.profile("opencode")
@@ -204,6 +215,8 @@ class CliTest(unittest.TestCase):
             self.assertIn(hid, out)
             self.assertIn("Enforced:", out)
             self.assertIn("Instructed:", out)
+            skill = harness.profile(hid)["tools"]["skill"]
+            self.assertIn(f"skill={skill or 'none'}", out)
             instructed = harness.instructed(harness.profile(hid))
             if instructed:
                 for g in instructed:

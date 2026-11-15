@@ -1065,9 +1065,108 @@ class RecordEditAndOrient(HookCase):
     def test_hooks_json_passes_harness_claude(self):
         cfg = json.loads((HOOKS / "hooks.json").read_text())["hooks"]
         cmds = [h["command"] for ms in cfg.values() for m in ms for h in m["hooks"]]
-        self.assertEqual(len(cmds), 7)
+        self.assertEqual(len(cmds), 8)
         for c in cmds:
             self.assertIn("--harness claude", c)
+
+    def test_hooks_json_wires_skill_guard(self):
+        groups = json.loads((HOOKS / "hooks.json").read_text())["hooks"]["PreToolUse"]
+        cmds = [h["command"] for g in groups if g["matcher"] == "Skill" for h in g["hooks"]]
+        self.assertEqual(len(cmds), 1)
+        self.assertIn("skill_guard.py\" --harness claude", cmds[0])
+
+
+class SkillGuard(HookCase):
+    def skill(self, name, sid="s1", cwd=None, raw_input=None):
+        payload = {"tool_name": "Skill", "tool_input": {"skill": name} if raw_input is None else raw_input,
+                   "session_id": sid, "cwd": str(cwd or self.home)}
+        if raw_input == "missing":
+            del payload["tool_input"]
+        return self.hook("skill_guard", payload)
+
+    def in_run(self, name):
+        self.activate()
+        return self.skill(name, cwd=self.run_dir)
+
+    def mark(self, sid="s1"):
+        f = self.home / ".config" / "kinetic" / "sessions" / sid
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("2026-11-15T00:00:00Z")
+
+    def set_deny(self, value):
+        cfg = self.proj / ".kinetic" / "config.json"
+        data = json.loads(cfg.read_text()) if cfg.is_file() else {}
+        data["skill_guard"] = {"deny": value}
+        cfg.write_text(json.dumps(data))
+
+    def reason(self, out):
+        return out["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_skill_guard_denies_listed_skill_in_run(self):
+        out = self.in_run("superpowers:brainstorming")
+        self.assertEqual(self.decision(out), "deny")
+        phase = state.load(self.run_dir)["phase"]
+        r = self.reason(out)
+        self.assertTrue(r.startswith(f"kinetic run {self.run_dir.name} is active (phase {phase}). Next: "), r)
+        self.assertTrue(r.endswith("."), r)
+
+    def test_skill_guard_asks_in_marked_session(self):
+        self.mark()
+        out = self.skill("mattpocock-skills:grilling")
+        self.assertEqual(self.decision(out), "ask")
+        self.assertEqual(self.reason(out),
+                         "This conversation was started with /kinetic:start. Allow mattpocock-skills:grilling?")
+
+    def test_skill_guard_silent_for_unlisted_kinetic_and_unmarked(self):
+        names = ("superpowers:receiving-code-review", "kinetic:grill", "kntc-run")
+        self.mark()
+        for name in names:
+            self.assertIsNone(self.skill(name), name)
+        self.activate()
+        for name in names:
+            self.assertIsNone(self.skill(name, cwd=self.run_dir), name)
+        # a listed skill in a session with no run and no mark
+        self.assertIsNone(self.skill("superpowers:brainstorming", sid="s9"))
+
+    def test_skill_guard_leading_slash_matches(self):
+        self.mark()
+        out = self.skill("/grilling")
+        self.assertEqual(self.decision(out), "ask")
+        self.assertTrue(self.reason(out).endswith("Allow grilling?"))
+        self.assertEqual(self.decision(self.in_run("/superpowers:writing-plans")), "deny")
+
+    def test_skill_guard_unreadable_input_passes(self):
+        self.mark()
+        self.activate()
+        for raw in ("missing", "x", {"skill": 5}, {}):
+            self.assertIsNone(self.skill(None, cwd=self.run_dir, raw_input=raw), raw)
+
+    def test_skill_guard_project_deny_list_replaces_default(self):
+        self.set_deny(["my-flow"])
+        self.assertEqual(self.decision(self.in_run("my-flow")), "deny")
+        self.assertIsNone(self.skill("superpowers:brainstorming", cwd=self.run_dir))
+        # a marked session outside every project keeps the default list
+        self.mark()
+        self.assertIsNone(self.skill("my-flow"))
+        self.assertEqual(self.decision(self.skill("superpowers:brainstorming")), "ask")
+
+    def test_skill_guard_malformed_project_deny_uses_default(self):
+        self.activate()
+        for bad in ("x", 3, ["ok", 4]):
+            self.set_deny(bad)
+            self.assertEqual(self.decision(self.skill("superpowers:brainstorming", cwd=self.run_dir)), "deny", bad)
+
+    def test_skill_guard_denies_without_next_when_suggest_fails(self):
+        sys.path.insert(0, str(HOOKS))
+        import skill_guard
+        self.activate()
+        out = []
+        with mock.patch.object(skill_guard._common, "pre_tool", lambda d, r: out.append((d, r))), \
+                mock.patch("kinetic.next_step.suggest", side_effect=RuntimeError("boom")):
+            skill_guard.main({"tool_name": "Skill", "tool_input": {"skill": "triage"},
+                              "session_id": "s1", "cwd": str(self.run_dir)})
+        phase = state.load(self.run_dir)["phase"]
+        self.assertEqual(out, [("deny", f"kinetic run {self.run_dir.name} is active (phase {phase}).")])
 
 
 

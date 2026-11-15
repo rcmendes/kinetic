@@ -291,10 +291,12 @@ def _write_ops_matcher(shell: str) -> str:
             "create_branch|delete_file).*")
 
 
-def _hook_spec(edit_matcher: str, shell: str) -> list:
+def _hook_spec(edit_matcher: str, shell: str, skill=None) -> list:
     """(event, matcher, script) triples mirroring hooks/hooks.json for one
     harness: edit_matcher covers the file-edit tools (the patch tool
-    included), shell the shell tool."""
+    included), shell the shell tool, skill the skill tool (no skill guard
+    when the harness has none)."""
+    guard = [("PreToolUse", f"^{skill}$", "skill_guard.py")] if skill else []
     return [
         ("PostToolUse", edit_matcher, "record_edit.py"),
         ("PostToolUse", f"^{shell}$", "claim_run.py"),
@@ -304,7 +306,7 @@ def _hook_spec(edit_matcher: str, shell: str) -> list:
         ("PreToolUse", "mcp__.*deploy.*|mcp__.*tekton.*trigger.*",
          "confirm_deploy.py"),
         ("SessionStart", "", "orient.py"),
-    ]
+    ] + guard
 
 
 def _edit_names(tools: dict, *extra: str) -> str:
@@ -324,7 +326,7 @@ def _devin_hook_spec() -> list:
     normalizer extracts its patch-header paths)."""
     tools = harness.profile("devin")["tools"]
     edit = _edit_names(tools) or "a^"  # matches nothing when empty
-    return _hook_spec(f"^({edit})$", tools["shell"])
+    return _hook_spec(f"^({edit})$", tools["shell"], tools["skill"])
 
 
 def _hook_groups(clone: Path, harness_id: str, spec: list) -> dict:
@@ -703,7 +705,7 @@ def _codex_hook_spec() -> list:
     answers to the Write/Edit aliases Codex registers for it."""
     tools = harness.profile("codex")["tools"]
     edit = _edit_names(tools, "Write", "Edit")
-    return _hook_spec(edit, tools["shell"])
+    return _hook_spec(edit, tools["shell"], tools["skill"])
 
 
 def codex_hook_groups(clone: Path) -> dict:
