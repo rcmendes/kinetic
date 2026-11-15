@@ -101,6 +101,24 @@ class ProjectTest(unittest.TestCase):
         self.assertTrue(t.startswith("mine\n\n" + project.INSTRUCTIONS_BEGIN))
         self.assertTrue(t.endswith(project.INSTRUCTIONS_END + "\n"))
 
+    def test_instructions_keeps_text_after_a_dangling_begin(self):
+        block = f"{project.INSTRUCTIONS_BEGIN}\nold\n{project.INSTRUCTIONS_END}"
+        (self.proj / "AGENTS.md").write_text(f"a\n{project.INSTRUCTIONS_BEGIN}\nmine\n\n{block}\n")
+        project.write_instructions(self.proj)
+        t = (self.proj / "AGENTS.md").read_text()
+        self.assertTrue(t.startswith(f"a\n{project.INSTRUCTIONS_BEGIN}\nmine\n\n{project.INSTRUCTIONS_BEGIN}\n"), t)
+        self.assertNotIn("\nold\n", t)
+
+    def test_instructions_write_through_a_symlink_once(self):
+        (self.proj / "AGENTS.md").write_text("mine\n")
+        (self.proj / "CLAUDE.md").unlink(missing_ok=True)
+        (self.proj / "CLAUDE.md").symlink_to("AGENTS.md")
+        project.write_instructions(self.proj)
+        self.assertTrue((self.proj / "CLAUDE.md").is_symlink())
+        t = (self.proj / "AGENTS.md").read_text()
+        self.assertTrue(t.startswith("mine\n\n"))
+        self.assertEqual(t.count(project.INSTRUCTIONS_BEGIN), 1)
+
     def test_missing_instructions(self):
         self.assertEqual(project.missing_instructions(self.proj), [])
         (self.proj / "AGENTS.md").unlink()

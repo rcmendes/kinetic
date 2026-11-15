@@ -32,7 +32,9 @@ def suggest(st: dict | None) -> dict:
             return _r("/kinetic:run", "review and ship")
     if st["phase"] == "ship" and st["gates"].get("ship", {}).get("approved"):
         return _r("/kinetic:run", "retro")
-    return _r("/kinetic:status", "check the board")
+    if st["phase"] == "done":
+        return _r("/kinetic:status", "check the board")
+    return _r("/kinetic:run", f"resume at {st['phase']}")
 
 
 def _active() -> dict:

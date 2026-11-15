@@ -18,6 +18,11 @@ def _emit(text: str) -> None:
 
 
 def main(inp):
+    try:  # marks also expire here, not only when another mark is written
+        proj = _common.project.find(inp.get("cwd") or None) if _common.project else None
+    except Exception:
+        proj = None
+    _common.sweep_sessions(proj)
     # no owner-scope check: orient every session, so a new one can resume
     run_dir = _common.run_dir_for(inp)
     if run_dir is None:

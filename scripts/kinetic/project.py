@@ -111,17 +111,21 @@ def create(parent: Path, name: str) -> Path:
 
 def _block_span(text: str):
     """(start, end) of the complete block in text, or None."""
-    i = text.find(INSTRUCTIONS_BEGIN)
-    if i < 0:
-        return None
-    j = text.find(INSTRUCTIONS_END, i)
-    return None if j < 0 else (i, j + len(INSTRUCTIONS_END))
+    j = text.find(INSTRUCTIONS_END)
+    # the begin nearest the end, so a dangling begin earlier keeps the user text after it
+    i = text.rfind(INSTRUCTIONS_BEGIN, 0, j) if j >= 0 else -1
+    return None if i < 0 else (i, j + len(INSTRUCTIONS_END))
 
 
 def write_instructions(project: Path) -> list:
-    written = []
+    written, seen = [], set()
     for name in INSTRUCTION_FILES:
-        path = Path(project) / name
+        link = Path(project) / name
+        path = link.resolve()  # write through a symlink (CLAUDE.md -> AGENTS.md), and once
+        if path in seen:
+            written.append(str(link))
+            continue
+        seen.add(path)
         text = path.read_text() if path.is_file() else ""
         span = _block_span(text)
         if span:
@@ -130,10 +134,10 @@ def write_instructions(project: Path) -> list:
             new = text.rstrip("\n") + "\n\n" + _BLOCK + "\n"
         else:
             new = _BLOCK + "\n"
-        tmp = path.with_name(name + ".tmp")
+        tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(new)
         os.replace(tmp, path)
-        written.append(str(path))
+        written.append(str(link))
     return written
 
 

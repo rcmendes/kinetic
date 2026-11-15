@@ -38,7 +38,7 @@ def main(inp):
     if not name or name.startswith(("kinetic:", "kntc-")):
         return
     found = _common.active_run(inp, tickets=False)
-    if found:
+    if found and found[1].get("phase") != "done":  # a done run is no run: fall through to the mark
         run_dir, st = found
         if name not in deny_list(run_dir):
             return

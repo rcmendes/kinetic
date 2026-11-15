@@ -159,12 +159,64 @@ class SessionScope(HookCase):
         self.bind("open")
         self.bind("done", done)
         self.bind("gone", self.proj / "runs" / "nope")
-        old = os.path.getmtime(self.proj / ".kinetic" / "sessions" / "open") - 30 * 86400
-        os.utime(self.proj / ".kinetic" / "sessions" / "open", (old, old))
+        for sid in ("open", "done", "gone"):
+            self.age(self.proj / ".kinetic" / "sessions" / sid, 30 * 86400)
         self.claim("s1")
         self.assertEqual(self.binding("open"), str(self.run_dir))
         self.assertIsNone(self.binding("done"))
         self.assertIsNone(self.binding("gone"))
+
+    def age(self, f, seconds):
+        t = os.path.getmtime(f) - seconds
+        os.utime(f, (t, t))
+
+    def sweep(self, proj=None):
+        sys.path.insert(0, str(HOOKS))
+        import _common
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}):
+            _common.sweep_sessions(proj)
+
+    def test_sweep_keeps_empty_or_fresh_binding(self):
+        self.activate()
+        (self.proj / ".kinetic" / "sessions" / "empty").write_text("")
+        self.age(self.proj / ".kinetic" / "sessions" / "empty", 3600)
+        self.bind("fresh", self.proj / "runs" / "nope")  # another session's write in flight
+        self.bind("gone", self.proj / "runs" / "nope")
+        self.age(self.proj / ".kinetic" / "sessions" / "gone", 3600)
+        self.sweep(self.proj)
+        self.assertEqual(self.binding("empty"), "")
+        self.assertIsNotNone(self.binding("fresh"))
+        self.assertIsNone(self.binding("gone"))
+
+    def test_sweep_skips_symlinked_sessions_folders(self):
+        self.activate()
+        for real, link in ((self.home.parent / "marks", self.home / ".config" / "kinetic" / "sessions"),
+                           (self.home.parent / "bindings", self.proj / ".kinetic" / "sessions")):
+            real.mkdir()
+            (real / "x").write_text(str(self.proj / "runs" / "nope"))
+            self.age(real / "x", 30 * 86400)
+            link.parent.mkdir(parents=True, exist_ok=True)
+            if link.exists():
+                link.rmdir()
+            link.symlink_to(real)
+        self.sweep(self.proj)
+        self.assertTrue((self.home.parent / "marks" / "x").exists())
+        self.assertTrue((self.home.parent / "bindings" / "x").exists())
+
+    def test_chained_commands_still_mark_and_bind(self):
+        self.activate()
+        for i, sep in enumerate((";", "&&", "|")):
+            self.start(f"m{i}", cmd=f"kinetic project start-session{sep}kinetic project find")
+            self.assertTrue(self.mark(f"m{i}").is_file(), sep)
+            self.claim(f"b{i}", cmd=f"kinetic project use-run --run {self.run_dir}{sep}echo ok")
+            self.assertEqual(self.binding(f"b{i}"), str(self.run_dir), sep)
+
+    def test_quoted_kinetic_path_with_spaces(self):
+        self.activate()
+        self.start("m", cmd="python3 '/opt/my plugin/bin/kinetic' project start-session;echo ok")
+        self.assertTrue(self.mark("m").is_file())
+        self.claim("b", cmd=f'python3 "/opt/my plugin/bin/kinetic" project use-run --run {self.run_dir}&&echo ok')
+        self.assertEqual(self.binding("b"), str(self.run_dir))
 
     def test_bound_session_isolated_after_cd_out_of_project(self):
         self.activate()
@@ -1046,6 +1098,23 @@ class RecordEditAndOrient(HookCase):
             "hookSpecificOutput"]["additionalContext"]
         self.assertIn("feature", text)
 
+    def test_orient_sweeps_old_marks_at_session_start(self):
+        marks = self.home / ".config" / "kinetic" / "sessions"
+        marks.mkdir(parents=True)
+        (marks / "old").write_text("x")
+        t = os.path.getmtime(marks / "old") - 8 * 86400
+        os.utime(marks / "old", (t, t))
+        (marks / "new").write_text("x")
+        self.hook("orient", {"cwd": str(self.home), "session_id": "s1"})
+        self.assertFalse((marks / "old").exists())
+        self.assertTrue((marks / "new").exists())
+
+    def test_orient_open_run_points_to_run(self):
+        self.activate()
+        text = self.hook("orient", {})["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("next: /kinetic:run", text)
+        self.assertIn("why: resume at intake", text)
+
     def test_orient_prints_at_most_five_lines(self):
         self.activate()
         out = self.hook("orient", {})["hookSpecificOutput"]
@@ -1155,6 +1224,27 @@ class SkillGuard(HookCase):
         for bad in ("x", 3, ["ok", 4]):
             self.set_deny(bad)
             self.assertEqual(self.decision(self.skill("superpowers:brainstorming", cwd=self.run_dir)), "deny", bad)
+
+    def test_skill_guard_done_run_is_no_run(self):
+        self.activate()
+        self.bind("s1")
+        state._mutate(self.run_dir, lambda s: s.update(phase="done"))
+        self.assertIsNone(self.skill("superpowers:brainstorming", cwd=self.proj))
+        self.mark()
+        self.assertEqual(self.decision(self.skill("superpowers:brainstorming", cwd=self.proj)), "ask")
+
+    def test_skill_guard_deny_reason_points_to_run(self):
+        self.assertTrue(self.reason(self.in_run("triage")).endswith("Next: /kinetic:run."))
+
+    def test_skill_guard_default_list_has_bare_superpowers_names(self):
+        names = ("brainstorming", "writing-plans", "executing-plans", "subagent-driven-development",
+                 "using-git-worktrees", "finishing-a-development-branch")
+        self.mark()
+        for name in names:
+            self.assertEqual(self.decision(self.skill(name)), "ask", name)
+        self.activate()
+        for name in names:
+            self.assertEqual(self.decision(self.skill(name, cwd=self.run_dir)), "deny", name)
 
     def test_skill_guard_denies_without_next_when_suggest_fails(self):
         sys.path.insert(0, str(HOOKS))

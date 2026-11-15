@@ -263,11 +263,12 @@ def has_mark(inp: dict) -> bool:
 
 def sweep_sessions(proj=None) -> None:
     """Delete start marks older than MARK_DAYS and, given a project, the run bindings whose run is
-    gone or done. Touches only regular files in those two folders; never raises."""
+    gone or done. Touches only regular files in those two folders, never a symlinked folder, an
+    empty binding or one written under 60 seconds ago; never raises."""
     try:
         cutoff = time.time() - MARK_DAYS * 86400
         marks = Path.home() / ".config" / "kinetic" / "sessions"
-        for f in marks.iterdir() if marks.is_dir() else []:
+        for f in marks.iterdir() if marks.is_dir() and not marks.is_symlink() else []:
             try:
                 if f.is_file() and not f.is_symlink() and f.stat().st_mtime < cutoff:
                     f.unlink()
@@ -277,9 +278,14 @@ def sweep_sessions(proj=None) -> None:
             return
         open_dirs = {os.path.realpath(r["run_dir"]) for r in project.open_runs(proj)}
         bindings = Path(proj) / ".kinetic" / "sessions"
+        if bindings.is_symlink():
+            return
         for f in bindings.iterdir() if bindings.is_dir() else []:
             try:
-                if f.is_file() and not f.is_symlink() and os.path.realpath(f.read_text().strip()) not in open_dirs:
+                if not f.is_file() or f.is_symlink() or time.time() - f.stat().st_mtime < 60:
+                    continue  # a fresh file may be another session's atomic_write in flight
+                bound = f.read_text().strip()
+                if bound and os.path.realpath(bound) not in open_dirs:
                     f.unlink()
             except (OSError, ValueError):
                 pass

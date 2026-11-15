@@ -9,8 +9,12 @@ import _common
 
 def _kinetic_args(cmd: str, sub: str):
     """The words after the first `kinetic project <sub>` in cmd, or None."""
-    try:
-        words = shlex.split(cmd)
+    if "kinetic" not in cmd:
+        return None
+    try:  # split on ; && | too, so `start-session;` is still the word `start-session`
+        s = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        s.whitespace_split = True
+        words = list(s)
     except ValueError:
         return None
     for i in range(len(words) - 2):
