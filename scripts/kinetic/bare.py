@@ -48,7 +48,7 @@ def list_clones(bare_dir) -> list:
     out = []
     for child in sorted(root.iterdir(), key=lambda c: c.name):
         if child.is_dir() and is_bare(child):
-            out.append({"name": child.name, "path": str(child),
+            out.append({"name": _stem(child.name), "path": str(child),
                         "remote": _git(child, "config", "--get", "remote.origin.url"),
                         "default_branch": default_branch(child)})
     return out
@@ -62,6 +62,10 @@ def _run(argv) -> str:
     if r.returncode != 0:
         raise RuntimeError((r.stderr or r.stdout).strip() or f"{argv[0]} failed")
     return r.stdout
+
+
+def _stem(name: str) -> str:
+    return name[:-4] if name.endswith(".git") else name
 
 
 def _valid_name(name) -> bool:
@@ -80,7 +84,8 @@ def clone(bare_dir, repo=None, url=None, name=None) -> dict:
         raise ValueError("give either --repo ORG/NAME, or --url together with --name")
     if not _valid_name(name):
         raise ValueError(f"--name must be a single path component, got: {name}")
-    dest = root / (name if name.endswith(".git") else name + ".git")
+    name = _stem(name)
+    dest = root / f"{name}.git"
     if dest.exists():
         raise ValueError(f"already exists: {dest}")
     try:
@@ -97,7 +102,7 @@ def clone(bare_dir, repo=None, url=None, name=None) -> dict:
     except RuntimeError:
         shutil.rmtree(dest, ignore_errors=True)  # no half-made clone left to block a retry
         raise
-    return {"name": dest.name, "path": str(dest), "default_branch": branch}
+    return {"name": name, "path": str(dest), "default_branch": branch}
 
 
 def _origin_refs(clone_path) -> dict:
@@ -115,7 +120,8 @@ def _refresh_one(bare_dir, name) -> dict:
     if not _valid_name(name):
         return {"name": name, "ok": False, "advanced": [],
                 "error": f"name is not a single path component: {name}"}
-    path = Path(bare_dir) / name
+    name = _stem(name)
+    path = Path(bare_dir) / f"{name}.git"
     if not (path.is_dir() and is_bare(path)):
         return {"name": name, "ok": False, "advanced": [],
                 "error": f"no bare clone named {name} in {bare_dir}"}
