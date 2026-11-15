@@ -99,9 +99,12 @@ class CliTest(unittest.TestCase):
         state.init(run, "quick", "X-1")
         self.assertEqual(self.out(["--run", str(run)], self.base)["command"], "/kinetic:status")
 
-    def test_no_run_outside_project_or_in_empty_project(self):
-        self.assertEqual(self.out([], self.base)["command"], "/kinetic:run <ref>")
+    def test_no_run_in_empty_project(self):
         self.assertEqual(self.out([], self.proj)["command"], "/kinetic:run <ref>")
+
+    def test_next_step_outside_project_points_to_start(self):
+        self.assertEqual(self.out([], self.base),
+                         {"command": "/kinetic:start", "reason": "no kinetic project here"})
 
     def test_run_from_cwd(self):
         run = project.run_dir(self.proj, "r1")

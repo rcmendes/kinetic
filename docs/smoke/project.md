@@ -11,3 +11,7 @@ orbit list --json --dir <project>       # {"data":{"count":0,"tasks":[]},"meta":
 
 Result: `ok` is true. An Orbit Board can live in the project folder, so the default
 anchor stays the project folder. No change to `orbit_store`, no fallback test.
+
+## Open fact: instruction files from a parent folder
+
+`kinetic project create` writes `<project>/AGENTS.md` and `<project>/CLAUDE.md`. Open: whether each harness (Claude Code, Codex, OpenCode, Devin) reads an instruction file from a parent folder when the session starts inside a worktree under `<project>/runs/<run-id>/worktrees/<repo>`. Probe: start a session in such a worktree and ask the agent what the kinetic block in its instructions says. Record the date, the command and the answer per harness here.

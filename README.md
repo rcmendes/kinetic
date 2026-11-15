@@ -91,8 +91,8 @@ Optional companions that kinetic uses when present and falls back without: the `
 
 ## Quick start
 
-1. `/kinetic:start` and talk the idea through: the goal, the repos or systems involved, the links and files that matter. Once the talk has that shape, kinetic asks once "Turn this into a project?". On yes it proposes a name and a folder (never inside a git repo), creates the project folder (`.kinetic/`, `bare-repos/`, `runs/`), writes the conversation's notes and references into the first run's `docs/`, and tells you to open a new session inside the project and run `/kinetic:run`, which starts that run at the grill. Nothing is written before the yes.
-2. Inside a project, `/kinetic:run "let partners export statements as CSV"` (or a Jira key, or a path to a spec) starts another run. kinetic picks a lane, says why in one line, and lets you override it. The discover phase clones each repo into `bare-repos/` (or creates it on GitHub, after you confirm owner, name and visibility) and asks for its verify and optional setup commands; the decompose phase asks whether the run publishes to a tracker.
+1. `/kinetic:start` and talk the idea through: the goal, the repos or systems involved, the links and files that matter. Its first step runs `kinetic project start-session`, which leaves a start mark for this conversation (`~/.config/kinetic/sessions/<session_id>`, kept 7 days): other process skills then ask before they take the conversation over, even if it never becomes a project. Once the talk has that shape, kinetic asks once "Turn this into a project?". On yes it proposes a name and a folder (never inside a git repo), creates the project folder (`.kinetic/`, `bare-repos/`, `runs/`, and the kinetic block in `AGENTS.md` and `CLAUDE.md`), asks the run id (the recommended one, or one you type), writes the conversation's notes and references into the first run's `docs/`, and tells you to open a new session inside the project and run `/kinetic:run`, which starts that run at the grill. Nothing is written before the yes.
+2. Inside a project, `/kinetic:run "let partners export statements as CSV"` (or a Jira key, or a path to a spec) starts another run. For an idea or a spec path it asks the run id (the recommended slug, or one you type); a ticket key is the run id. kinetic picks a lane, says why in one line, and lets you override it. The discover phase clones each repo into `bare-repos/` (or creates it on GitHub, after you confirm owner, name and visibility) and asks for its verify and optional setup commands; the decompose phase asks whether the run publishes to a tracker.
 3. Answer the grill questions, approve the spec, approve the ticket breakdown. From there implementers work in the background; you are asked only when one needs a decision.
 4. Approve the ship gate. kinetic pushes the integration branches and opens one draft PR per repo, in merge order.
 5. The retro presents improvement candidates and drafts a runbook and release notes under the run directory.
@@ -488,6 +488,10 @@ Machine-level settings stay in `~/.config/kinetic/settings.json`:
 
 `catalog_dir` is the repo catalog folder; `/kinetic:catalog-setup` writes it. Unset means no catalog anywhere. It holds `index.md` (generated), `terms.md` (the controlled vocabulary), `repos/<repo>.md` (domain terms per repo, with the deliverables behind each), `recipes/<slug>.md` (one kind of change, its parameters, and per repo what it is needed for, with a strength: always, usually, sometimes or seen once) and `ledger.json` (deliverables already cataloged). `/kinetic:catalog-refresh` fills it through `kinetic catalog apply` after you approve each recipe; `discover` reads it as its first source. Put it inside a git checkout to share it with a team; kinetic never commits it.
 
+`skill_guard.deny` (`"skill_guard": {"deny": ["superpowers:brainstorming", ...]}`) replaces the default list of process skills the `skill_guard` hook refuses (`hooks/skill_guard.json`) in sessions working on a run of this project. A session that carries only the start mark uses the default list.
+
+`kinetic project create` writes the instruction files `<project>/AGENTS.md` and `<project>/CLAUDE.md`: the same kinetic block, between `<!-- kinetic:begin -->` and `<!-- kinetic:end -->`, that tells an agent opened in the project to work through `/kinetic:run`. `kinetic project instructions` rewrites that block and keeps any other text in the files.
+
 With `"tracker": "local"` (or no `tracker` key) tickets are files under `<run_dir>/issues/`. See [Trackers](#trackers) for the other trackers, `tracker_settings` and `tracker_names`, and [The PR template override](#the-pr-template-override) for `pr_template`.
 
 ## Where state lives
@@ -525,10 +529,13 @@ The active run is the run of the current directory (the run folder or any worktr
 | `confirm_write_ops` | PreToolUse on Bash and GitHub/Jira MCP writes | Denies `git push` to `main`, `master` or `Release*`; asks before other pushes, `gh pr create|merge|edit|ready` and Jira or GitHub MCP write calls |
 | `confirm_deploy` | PreToolUse on deploy and Tekton-trigger MCP calls | Asks first |
 | `record_edit` | PostToolUse on file writes | Records edits so the Stop gate can compare them with verifies |
-| `claim_run` | PostToolUse on Bash | Records the session that ran `kinetic project use-run --run <run_dir>` as the run's owner |
+| `claim_run` | PostToolUse on Bash | Records the session that ran `kinetic project use-run --run <run_dir>` as the run's owner; after `kinetic project start-session` outside a project, writes the start mark `~/.config/kinetic/sessions/<session_id>`. Marks older than 7 days and bindings of runs that are gone or done are swept |
+| `skill_guard` | PreToolUse on the harness's skill tool | Denies a listed process skill (`hooks/skill_guard.json`, or the project's `skill_guard.deny`) in a session working on a run, and asks in a session that carries only the start mark. Kinetic's own skills always pass |
 | `orient` | SessionStart | Tells a new session about the active run and the next step |
 
 The run-scoped hooks (isolation, record_edit, completion_gate) find the run from the call's working directory, else from the session's binding (in the working directory's project, or in the project the session was started in once the working directory has left it, so a `cd` elsewhere does not lift isolation). They act only in the session that owns the run and on calls whose working directory is inside the run directory, so other Claude sessions on the machine are unaffected. At a project root with no binding they never pick a run. The push and deploy hooks always apply.
+
+`skill_guard` backs the `skill-ownership` guarantee: Enforced on Claude Code, where the profile names the skill tool (`tools.skill`), and Instructed on Devin, Codex and OpenCode, where the project instruction files and the skill text carry it. On Claude the hook sees only a skill the model invokes; a skill you type as a slash command is never refused (`docs/smoke/skill-hook.md`).
 
 ## Recovery and troubleshooting
 
