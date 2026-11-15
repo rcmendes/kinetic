@@ -1,6 +1,6 @@
 {
   "name": "kinetic",
-  "owner": {"name": "apoema-ai"},
+  "owner": {"name": "rcmendes"},
   "plugins": [
     {
       "name": "kinetic",
