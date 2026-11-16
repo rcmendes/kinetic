@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -29,10 +30,14 @@ def orbit_available() -> bool:
     if not shutil.which("orbit"):
         return False
     probe = subprocess.run(["orbit", "batch", "--help"], capture_output=True)
-    return probe.returncode == 0
+    if probe.returncode != 0:
+        return False
+    version = subprocess.run(["orbit", "--version"], capture_output=True, text=True)
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", version.stdout or "")
+    return bool(m) and tuple(int(g) for g in m.groups()) >= (0, 10, 16)
 
 
-SKIP_REASON = "orbit with `orbit batch` (Batches and Annotations) not installed"
+SKIP_REASON = "orbit 0.10.16 or later (Batches and Annotations, nested SubTasks) not installed"
 
 
 class DeriveTest(unittest.TestCase):
@@ -259,6 +264,77 @@ class CallTest(unittest.TestCase):
             with self.assertRaises(orbit_store.OrbitStoreError) as caught:
                 orbit_store.call("/board", ["list"])
         self.assertIn("install orbit", str(caught.exception))
+        self.assertIn("0.10.16", str(caught.exception))
+
+    def test_depth_refusal_names_the_config_fix(self):
+        bad = self.run_result({"ok": False, "error": {
+            "code": "INVALID_ARGUMENT",
+            "message": "SubTasks are one level deep by default; "
+                       "raise board.max_subtask_depth to nest further"}}, 1)
+        with mock.patch.object(orbit_store.subprocess, "run", return_value=bad):
+            with self.assertRaises(orbit_store.OrbitStoreError) as caught:
+                orbit_store.call("/board", ["batch", "--file", "-"])
+        self.assertEqual(caught.exception.fix,
+                         "add max_subtask_depth = 2 under [board] in the Board's config.toml")
+
+
+class OrbitHealthDepthTest(unittest.TestCase):
+    """health() reports whether the Board's config allows nested SubTasks."""
+
+    DEPTH_FIX = "add max_subtask_depth = 2 under [board] in the Board's config.toml"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        tmp_path = Path(tmp.name)
+        self.bin = tmp_path / "bin"
+        self.bin.mkdir()
+        self.board = tmp_path / "repo"
+        (self.board / ".orbit" / "board").mkdir(parents=True)
+        self.config = self.board / ".orbit" / "board" / "config.toml"
+        self.settings = tmp_path / "settings.json"
+        self.settings.write_text(json.dumps({"tracker": "orbit",
+                                             "tracker_settings": {"orbit_dir": str(self.board)}}))
+        patcher = mock.patch.dict(os.environ, {"PATH": str(self.bin)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        orbit = self.bin / "orbit"
+        orbit.write_text("#!/bin/sh\n"
+                         'case "$*" in *"batch --help"*) exit 0;; '
+                         "*export*) echo '{\"ok\":true,\"data\":{\"schema_version\":3}}'; "
+                         "exit 0;; esac\n"
+                         "exit 1\n")
+        orbit.chmod(0o755)
+
+    def depth_row(self) -> dict:
+        rows = orbit_store.OrbitTicketStore({}).health(self.settings)
+        return {r["name"]: r for r in rows}["orbit-depth"]
+
+    def test_missing_max_subtask_depth_fails_with_the_fix(self):
+        self.config.write_text('[board]\nnon_ready_labels = ["kinetic"]\n')
+        row = self.depth_row()
+        self.assertEqual(row["status"], "fail")
+        self.assertEqual(row["fix"], self.DEPTH_FIX)
+
+    def test_depth_one_fails_with_the_fix(self):
+        self.config.write_text("[board]\nmax_subtask_depth = 1\n")
+        row = self.depth_row()
+        self.assertEqual(row["status"], "fail")
+        self.assertEqual(row["fix"], self.DEPTH_FIX)
+
+    def test_depth_two_or_more_passes(self):
+        for depth in (2, 3):
+            self.config.write_text(f"[board]\nmax_subtask_depth = {depth}\n")
+            self.assertEqual(self.depth_row()["status"], "pass", depth)
+
+    def test_unreadable_config_warns(self):
+        self.config.write_text("[board]\nmax_subtask_depth = 2\n")
+        self.config.chmod(0o000)
+        self.addCleanup(self.config.chmod, 0o644)
+        self.assertEqual(self.depth_row()["status"], "warn")
+
+    def test_absent_config_warns(self):
+        self.assertEqual(self.depth_row()["status"], "warn")
 
 
 GIT_ENV = {"GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@example.com",

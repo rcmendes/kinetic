@@ -326,7 +326,7 @@ The tracker is where tickets live. A project has one tracker, kept in `<project>
 | `github` | `gh` | `github_repo` |
 | `linear` | a Linear MCP server | `linear_team` |
 | `local` (the default) | nothing | none |
-| `orbit` | `orbit` with Batches and Annotations (0.11.0 or later) | none; optional `orbit_dir` |
+| `orbit` | `orbit` with Batches and Annotations (0.10.16 or later) | none; optional `orbit_dir` |
 | `other` | whatever you describe | `tracker_description` |
 
 Each tracker is one prose file, `trackers/<name>.md`, that tells the skills how to create a ticket, link blockers, set a status and so on in that tracker. No Python talks to a tracker, so adding one means adding one adapter file. Skills use roles, not tracker words: `names.kind.human` (the label or type for a human ticket), `names.edge.merge`, `names.after`, `names.ships_with`, `names.related` and `names.status.<role>`.
