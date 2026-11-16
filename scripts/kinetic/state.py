@@ -450,6 +450,29 @@ def publish_tickets(run_dir) -> dict:
         return mapping
 
 
+def publish_spec(run_dir, title: str) -> dict:
+    """Publish <run_dir>/spec.md through the run's ticket store, record the ref it
+    returns as the run's spec (the same field set_spec writes) and return the
+    store's result {"ref", "published"}. A no-op for the local ticket store:
+    the ref is spec.md."""
+    spec = Path(run_dir) / "spec.md"
+    if not spec.is_file():
+        raise FileNotFoundError(f"no spec at {spec}; write the spec first")
+    body = spec.read_text()
+    if not body.strip():
+        raise ValueError(f"{spec} is empty; write the spec first")
+    with open(internal(run_dir) / "state.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        state = load(run_dir)
+        result = ticket_store.for_state(state).publish_spec(run_dir, state, title, body)
+        ref = result.get("ref")
+        if not isinstance(ref, str) or not ref:
+            raise ValueError("the ticket store returned no spec ref")
+        state["spec"] = ref
+        save(run_dir, state)
+        return result
+
+
 def add_ruling(run_dir, what: str, why: str, cost: str) -> None:
     _mutate(run_dir, lambda s: s["rulings"].append(
         {"what": what, "why": why, "cost": cost, "at": _now()}))
@@ -519,6 +542,7 @@ def main(argv=None) -> int:
     cmd("record-gate", ("--gate", {"required": True}), ("--approved", {"type": _bool, "required": True}),
         ("--note", {"default": ""}))
     cmd("publish-tickets")
+    cmd("publish-spec", ("--title", {"required": True}))
     cmd("add-ruling", ("--what", {"required": True}), ("--why", {"required": True}),
         ("--cost", {"required": True}))
     cmd("stale-running")
@@ -556,6 +580,8 @@ def main(argv=None) -> int:
             out = {"last_edit_at": load(a.run)["last_edit_at"]}
         elif a.cmd == "publish-tickets":
             out = publish_tickets(a.run)
+        elif a.cmd == "publish-spec":
+            out = publish_spec(a.run, a.title)
         elif a.cmd == "record-gate":
             record_gate(a.run, a.gate, a.approved, a.note)
             out = load(a.run)["gates"]
