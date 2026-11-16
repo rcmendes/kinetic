@@ -9,6 +9,10 @@ import unittest
 from pathlib import Path
 
 from kinetic import state, trace
+from tests.test_orbit_store import (SKIP_REASON, deep_board, make_orbit_run,
+                                    orbit_available, orbit_json, stage_two)
+
+SCRIPTS = str(Path(__file__).resolve().parents[1] / "scripts")
 
 
 def mk(tmp, spec="spec.md"):
@@ -92,6 +96,31 @@ class TraceTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(r.stdout)["slices"], [{"id": "02-ui", "tickets": ["03-web-c"]}])
         self.assertNotEqual(run("--id", "nope").returncode, 0)
+
+
+@unittest.skipUnless(orbit_available(), SKIP_REASON)
+class TraceOrbitRunTest(unittest.TestCase):
+    """`kinetic trace` on an Orbit run prints the Board's Task IDs."""
+
+    def test_trace_prints_the_spec_slice_and_ticket_task_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run, board = make_orbit_run(Path(tmp))
+            deep_board(board)
+            (run / "spec.md").write_text("# Spec\n\nBuild the exporter.\n")
+            spec_id = state.publish_spec(run, "Export CSV")["ref"]
+            stage_two(run)
+            mapping = state.publish_tickets(run)
+            ids = [spec_id, mapping["01-core"], mapping["01-api-a"], mapping["02-web-b"]]
+            out = subprocess.run([sys.executable, "-m", "kinetic", "trace", "--run", str(run)],
+                                 capture_output=True, text=True,
+                                 env=dict(os.environ, PYTHONPATH=SCRIPTS))
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(out.stdout.splitlines()[0], f"spec: {spec_id}")
+            for tid in ids[1:]:
+                self.assertIn(tid, out.stdout)
+            # orbit tree on the spec Task shows the same three levels.
+            tree = orbit_json(board, "tree", spec_id)["tasks"]
+            self.assertEqual({t["id"] for t in tree}, set(ids))
 
 
 if __name__ == "__main__":

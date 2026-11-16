@@ -326,7 +326,7 @@ The tracker is where tickets live. A project has one tracker, kept in `<project>
 | `github` | `gh` | `github_repo` |
 | `linear` | a Linear MCP server | `linear_team` |
 | `local` (the default) | nothing | none |
-| `orbit` | `orbit` with Batches and Annotations (0.11.0 or later) | none; optional `orbit_dir` |
+| `orbit` | `orbit` with Batches and Annotations (0.10.16 or later) | none; optional `orbit_dir` |
 | `other` | whatever you describe | `tracker_description` |
 
 Each tracker is one prose file, `trackers/<name>.md`, that tells the skills how to create a ticket, link blockers, set a status and so on in that tracker. No Python talks to a tracker, so adding one means adding one adapter file. Skills use roles, not tracker words: `names.kind.human` (the label or type for a human ticket), `names.edge.merge`, `names.after`, `names.ships_with`, `names.related` and `names.status.<role>`.
@@ -347,12 +347,12 @@ To rename any of these for your project, override them in the project config:
 
 With `tracker: orbit` a run's tickets live on an [Orbit](https://github.com/rcmendes/orbit) Board instead of in `state.json`, so there is one copy and nothing to drift. kinetic still schedules: the frontier, edge types, the parallel cap and fix rounds are unchanged. This works through the **ticket store**, the interface `state.py` reads and writes tickets through; every other tracker uses the local ticket store, exactly as before.
 
-- **What lives where.** Each slice is a Parent Task (`type: epic`) and each ticket a SubTask. Every kinetic field is in the Task's `kinetic` Annotation; Orbit's status, claim, waiting reason and labels are derived from it. A `blocked_by` edge is an Orbit dependency, with its edge type in the Annotation. Every Task of a run carries the label `kinetic-run-<run id>`.
+- **What lives where.** The run's spec is a top-level Task (`type: epic`); each slice is a plain Task nested under it and each ticket a SubTask of its slice (runs published before spec Tasks keep slices as `epic` Parent Tasks). The spec gate's answer is mirrored on the spec Task (its waiting reason and a `phase` Annotation), and it closes when the last slice finishes. Every kinetic field is in the Task's `kinetic` Annotation; Orbit's status, claim, waiting reason and labels are derived from it. A `blocked_by` edge is an Orbit dependency, with its edge type in the Annotation. Every Task of a run carries the label `kinetic-run-<run id>`.
 - **Decompose.** Tickets are staged in `<run_dir>/.kinetic/tickets.staged.json` with local ids, validated, and published in one `orbit batch` when the breakdown gate is approved (`kinetic state publish-tickets` does it on demand). Source Keys make a repeated publish safe.
 - **Other agents keep out.** Waiting agent tickets carry the hold label `kinetic`; add it to `non_ready_labels` in the Board's `config.toml` (doctor warns until you do). kinetic removes it and claims the Task in one batch when it dispatches the ticket.
 - **People.** A human ticket carries `ready-for-human`; finish it with `orbit done <id>`. An agent ticket marked done outside kinetic becomes `needs_decision`, because it has no passing verify.
 - **Liveness.** kinetic's PostToolUse hooks heartbeat the running ticket's claim at most every 5 minutes; `/kinetic:status` lists a running ticket whose lease lapsed as "implementer may be stuck".
-- **Board.** Found from `tracker_settings.orbit_dir`, else the run's first repo, then fixed for the run. `kinetic doctor` checks the binary, the Board, the export schema and the hold label.
+- **Board.** Found from `tracker_settings.orbit_dir`, else the run's first repo, then fixed for the run. `kinetic doctor` checks the binary, the Board, the export schema, the SubTask depth (`max_subtask_depth = 2`) and the hold label.
 
 ## Human tickets
 
@@ -382,7 +382,7 @@ In local mode tickets are markdown files under `<run_dir>/issues/`, and `issues/
 
 - `kinetic board header --run <run_dir> --id <id>` writes a ticket file's header (Status, Type, Repo, Slice, Blocked by, After, Ships with, Related, Assignee). Comments below the header are kept. Assignee is derived (human: the user, agent: the implementer), not stored.
 - `kinetic board render --run <run_dir>` rewrites the board.
-- `kinetic trace --run <run_dir> [--id <spec|slice|ticket>] [--json]` prints spec, slices and tickets as a tree, for the local and Orbit stores alike. `specify` records the spec with `kinetic state set-spec`.
+- `kinetic trace --run <run_dir> [--id <spec|slice|ticket>] [--json]` prints spec, slices and tickets as a tree, for the local and Orbit stores alike. `specify` records the spec with `kinetic state publish-spec` (or `set-spec` when the ticket store does not publish it).
 - `kinetic board drift --run <run_dir>` lists files that disagree with state. A file written by hand shows drift until its first `header`. If you mark a human ticket done by editing its file, kinetic sees the drift and asks before applying it.
 
 ## The PR template override
@@ -420,7 +420,7 @@ Ship fills one template for every PR. The default is `templates/pr-body.md`. To 
 | `catalog-refresh` | skill | sonnet | Reads merged deliverables, proposes recipes and repo terms, applies what you approve; `cleanup` offers it |
 | `grill` | phase skill | inline | Interview covering threat model and non-functional requirements; keeps the glossary and ADR drafts |
 | `discover` | phase skill | inline | Finds the run's repos from approved sources (base folders, your sources, the GitHub org), confirms them with you, clones them into `bare-repos/` (or creates a new one on GitHub), registers them and cuts their worktrees |
-| `specify` | phase skill | inline | Spec with testing decisions, linted by `spec_lint`, published to Jira or `<run_dir>/spec.md` |
+| `specify` | phase skill | inline | Spec with testing decisions, linted by `spec_lint`, published through the ticket store (the tracker or `<run_dir>/spec.md`) |
 | `decompose` | phase skill | inline | Vertical slices, per-repo tickets, typed edges, validated by `graph validate` |
 | `ship` | phase skill | inline | PR bodies, merge order, draft PR set |
 | `retro` | phase skill | inline | Retro, runbook, release notes |
@@ -503,7 +503,7 @@ With `"tracker": "local"` (or no `tracker` key) tickets are files under `<run_di
   .kinetic/sessions/    which session is bound to which run
   bare-repos/<repo>.git bare clone per repo; every worktree is cut from it
   runs/<run-id>/        one folder per run (<run_dir>):
-    spec.md               the spec (local mode, or a copy noting the Jira key)
+    spec.md               the spec; a tracker-published spec is generated from it (its reference is noted at the top)
     discovery.md          repos chosen by discover, with reasons and sources
     docs/                 notes.md and refs/ from /kinetic:start, GLOSSARY.md, adr/, runbook.md, release-notes.md
     issues/<id>.md        ticket files (local mode, quick lane, fix tickets)

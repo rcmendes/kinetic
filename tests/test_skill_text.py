@@ -231,6 +231,26 @@ class SkillTextTest(unittest.TestCase):
                        "never claims that task"):
             self.assertIn(needle, text)
 
+    def test_specify_publishes_the_spec_through_the_ticket_store(self):
+        text = (ROOT / "skills" / "specify" / "SKILL.md").read_text()
+        self.assertIn("kinetic spec_lint", text)
+        self.assertIn("kinetic state publish-spec --run <run_dir>", text)
+        self.assertLess(text.index("kinetic spec_lint"),
+                        text.index("kinetic state publish-spec"))
+        # publish-spec's JSON decides: set-spec stays only for the unpublished case.
+        self.assertIn('"published"', text)
+        self.assertIn("kinetic state set-spec", text)
+
+    def test_decompose_nests_slices_under_the_published_spec(self):
+        text = (ROOT / "skills" / "decompose" / "SKILL.md").read_text()
+        self.assertIn("children of the spec", text)
+        self.assertIn("kinetic trace --run <dir>", text)
+
+    def test_spec_gate_answer_updates_the_spec_on_the_ticket_store(self):
+        text = (ROOT / "skills" / "run" / "guides" / "gates.md").read_text()
+        self.assertIn("the tracker reference or `<run_dir>/spec.md`", text)
+        self.assertIn("the ticket store updates the spec", text)
+
     def test_discover_reads_catalog(self):
         text = (ROOT / "skills" / "discover" / "SKILL.md").read_text()
         for needle in ("kinetic catalog show", "index.md", "never skips"):

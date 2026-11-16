@@ -21,8 +21,15 @@ ANNOTATION_OWNER = "kinetic"
 LOCK_RETRIES = (0.2, 0.4, 0.8)
 STAGED = "tickets.staged.json"
 SCHEMA_VERSION = 3  # orbit export schema with Annotations and Source Keys
+MIN_ORBIT = "0.10.16"  # Batches, Annotations and nested SubTasks (board.max_subtask_depth)
+DEPTH_FIX = "add max_subtask_depth = 2 under [board] in the Board's config.toml"
 DONE = ("done", "done_with_concerns", "merged", "released")
 PAUSED = ("needs_decision", "blocked")
+SPEC_WAITING = "kinetic: spec approval"  # set while the spec gate is open
+SPEC_GENERATED = "generated from spec.md; edit the file, then publish-spec again"
+# The spec Task's `phase` Annotation for each sync_spec event.
+SPEC_PHASES = {"gate-approved": "approved", "gate-rejected": "revising",
+               "building": "building"}
 # Keys read() adds that are not ticket fields and are never written back.
 DERIVED = ("liveness",)
 
@@ -43,7 +50,7 @@ def call(anchor: str, args: list, stdin: str | None = None) -> dict:
             done = subprocess.run(cmd, input=stdin, capture_output=True, text=True, cwd=cwd)
         except FileNotFoundError:
             raise OrbitStoreError("NOT_INSTALLED", "the orbit command was not found",
-                                  "install orbit with Batches and Annotations (0.11.0 or later)")
+                                  f"install orbit with Batches and Annotations ({MIN_ORBIT} or later)")
         try:
             envelope = json.loads(done.stdout or "{}")
         except ValueError:
@@ -55,12 +62,14 @@ def call(anchor: str, args: list, stdin: str | None = None) -> dict:
         if code == "LOCKED" and delay is not None:
             time.sleep(delay)
             continue
-        raise OrbitStoreError(code, error.get("message") or done.stderr.strip()[:500],
-                              _fix(code))
+        message = error.get("message") or done.stderr.strip()[:500]
+        raise OrbitStoreError(code, message, _fix(code, message))
     raise AssertionError("unreachable")
 
 
-def _fix(code: str) -> str:
+def _fix(code: str, message: str = "") -> str:
+    if code == "INVALID_ARGUMENT" and "board.max_subtask_depth" in message:
+        return DEPTH_FIX
     return {
         "LOCKED": "another orbit command holds the Board lock; retry",
         "BOARD_NOT_FOUND": "set tracker_settings.orbit_dir or run orbit init in the repo",
@@ -194,6 +203,20 @@ def to_ticket(task: dict) -> dict:
     return t
 
 
+def _role(task: dict):
+    """The kinetic role Annotation: "spec", "slice" or None (a ticket)."""
+    return ((task.get("annotations") or {}).get(ANNOTATION_OWNER) or {}).get("role")
+
+
+def _is_slice(task: dict, label: str) -> bool:
+    """A slice Task: role "slice" (spec-Task runs) or, for old runs, an epic
+    carrying the run label."""
+    if _role(task) == "slice":
+        return True
+    return (task.get("type") == "epic" and _role(task) != "spec"
+            and label in (task.get("labels") or []))
+
+
 class OrbitTicketStore:
     def __init__(self, config: dict):
         self.config = config
@@ -209,11 +232,19 @@ class OrbitTicketStore:
             raise OrbitStoreError("BOARD_NOT_FOUND", str(e), "run from inside a kinetic project")
 
     def _names(self, st: dict) -> dict:
-        if not self.config.get("names"):
+        names = self.config.get("names")
+        if not names:
             from kinetic import tracker
             cfg = self._project(st) / ".kinetic" / "config.json"
-            self.config["names"] = tracker.resolve(settings=cfg)["names"]
-        return self.config["names"]
+            names = tracker.resolve(settings=cfg)["names"]
+        else:
+            # Names persisted before newer tracker adapter defaults (e.g.
+            # "spec") lack them; re-merge over the same base resolve() uses.
+            from kinetic import tracker
+            path = Path(tracker.ROOT) / "trackers" / "orbit.md"
+            names = tracker._merge(tracker.adapter_defaults(path), names)
+        self.config["names"] = names
+        return names
 
     def _anchor(self, st: dict) -> str:
         if not self.config.get("anchor"):
@@ -259,12 +290,14 @@ class OrbitTicketStore:
         if not self.config.get("anchor") and not st.get("repos"):
             return {}  # nothing published before the run has a Board
         run_id, names = st["run_id"], self._names(st)
+        label = run_label(run_id, names)
         data = call(self._anchor(st), ["list", "--include-closed", "--all",
-                                       "--label", run_label(run_id, names)])
+                                       "--label", label])
         tasks = data.get("tasks", [])
         prefix = source_key(run_id, "")
         ids = {task["source_key"][len(prefix):]: task["id"] for task in tasks
-               if (task.get("source_key") or "").startswith(prefix)}
+               if (task.get("source_key") or "").startswith(prefix)
+               and _role(task) != "spec"}
         # Provisional ids keep resolving after publish, and run-level records are
         # rebuilt from the Board, so a save lost right after a publish heals here.
         st["ticket_aliases"] = ids
@@ -272,11 +305,11 @@ class OrbitTicketStore:
             self.config["published"] = True
             self.config["published_slices"] = sorted(
                 task["id"] for task in tasks
-                if task.get("type") == "epic" and task["id"] in ids.values())
+                if _is_slice(task, label) and task["id"] in ids.values())
             st["slices"] = [ids.get(s, s) for s in st.get("slices", [])]
         tickets, fixes = {}, []
         for task in tasks:
-            if task.get("type") == "epic":
+            if _is_slice(task, label) or _role(task) == "spec":
                 continue
             t = _rewrite(to_ticket(task), ids)
             if not t:
@@ -335,11 +368,22 @@ class OrbitTicketStore:
         from kinetic import graph
         run_id, names = st["run_id"], self._names(st)
         ref = self._ref(run_id, set(tickets) | set(new_slices), aliases)
-        ops = [{"op": "add", "key": source_key(run_id, s), "title": ticket_text(run_dir, s)[0],
-                "type": "epic", "labels": [run_label(run_id, names)],
+        spec_id = self.config.get("spec_task")
+        ops = []
+        for s in new_slices:
+            add = {"op": "add", "key": source_key(run_id, s),
+                   "title": ticket_text(run_dir, s)[0],
+                   "labels": [run_label(run_id, names)]}
+            if spec_id:
+                # New shape: a plain Task nested under the run's spec Task.
+                add["parent"] = spec_id
+                add["annotations"] = {ANNOTATION_OWNER: {"role": "slice", "spec": spec_id}}
+            else:
+                add["type"] = "epic"
                 # optional: Boards and runs without a recorded spec never see this Annotation
-                **({"annotations": {ANNOTATION_OWNER: {"spec": st["spec"]}}} if st.get("spec") else {})}
-               for s in new_slices]
+                if st.get("spec"):
+                    add["annotations"] = {ANNOTATION_OWNER: {"spec": st["spec"]}}
+            ops.append(add)
         try:
             order = graph.topo_order(tickets)
         except ValueError:
@@ -361,7 +405,8 @@ class OrbitTicketStore:
         return ops, order
 
     def _close_slices(self, st: dict, staged: dict, before: dict, after: dict) -> list:
-        """Close a slice's Parent Task in the Batch that finishes its last SubTask."""
+        """Close a slice's Task in the Batch that finishes its last SubTask, and
+        the spec Task in the Batch that finishes the last slice."""
         published = set(self.config.get("published_slices", []))
         by_slice: dict = {}
         for tid, t in after.items():
@@ -373,7 +418,71 @@ class OrbitTicketStore:
             just = any((before.get(t) or {}).get("status") not in DONE for t in tids)
             if finished and just:
                 ops.append({"op": "done", "id": slice_id, "by": holder(st["run_id"])})
+        spec_id = self.config.get("spec_task")
+        # Orbit refuses `done` on a Task with open SubTasks, so the spec closes
+        # only once every published slice's tickets are done. Decompose keeps
+        # every published slice non-empty (graph.validate refuses a slice no
+        # ticket references), so each one shows up in by_slice; an empty slice
+        # would make this check never pass.
+        if spec_id and ops and all(
+                by_slice.get(sid)
+                and all(after[t].get("status") in DONE for t in by_slice[sid])
+                for sid in published):
+            ops.append({"op": "done", "id": spec_id, "by": holder(st["run_id"])})
         return ops
+
+    def spec_ops(self, run_dir, st: dict, title: str, body: str) -> list:
+        """Batch operations publishing the run's spec Task: one `add` whose Source Key
+        matches the Task when it exists, so the ops that follow rewrite it either way."""
+        run_id, names = st["run_id"], self._names(st)
+        key = source_key(run_id, "spec")
+        ref = f"key:{key}"
+        labels = sorted({run_label(run_id, names), names["spec"], names["hold"]})
+        annotation = {"role": "spec", "run": run_id, "phase": "awaiting-approval"}
+        text = f"{SPEC_GENERATED}\n\n{body}"
+        return [
+            {"op": "add", "key": key, "title": title, "type": "epic",
+             "labels": labels, "waiting_on": SPEC_WAITING, "body": text,
+             "annotations": {ANNOTATION_OWNER: annotation}},
+            {"op": "update", "id": ref, "title": title, "body": text,
+             "waiting_on": SPEC_WAITING},
+            {"op": "annotate", "id": ref, "owner": ANNOTATION_OWNER, "value": annotation},
+            {"op": "label", "id": ref, "add": labels},
+        ]
+
+    def publish_spec(self, run_dir, st: dict, title: str, body: str) -> dict:
+        """Publish the spec as the run's epic spec Task; republishing rewrites it."""
+        anchor = Path(self._anchor(st))
+        depth = _max_depth(anchor)
+        if depth is not None and depth < 2:
+            raise OrbitStoreError("INVALID_ARGUMENT",
+                                  "the Board nests SubTasks one level deep, but "
+                                  "the spec Task holds slices and their tickets "
+                                  f"(board.max_subtask_depth is {depth})",
+                                  DEPTH_FIX)
+        keys = self._batch(st, self.spec_ops(run_dir, st, title, body)).get("keys", {})
+        ref = keys[source_key(st["run_id"], "spec")]
+        self.config["spec_task"] = ref
+        return {"ref": ref, "published": True}
+
+    def sync_spec(self, run_dir, st: dict, event: str) -> None:
+        """Mirror a spec lifecycle event on the spec Task: the gate closing clears
+        `waiting_on` and the `phase` Annotation tracks the run. "done" needs
+        nothing here: _close_slices already closes the spec Task in the Batch
+        that finishes the last slice."""
+        spec_id = self.config.get("spec_task")
+        if not spec_id or event == "done":
+            return
+        phase = SPEC_PHASES.get(event)
+        if phase is None:
+            raise OrbitStoreError(
+                "INVALID_ARGUMENT", f"unknown spec sync event '{event}'",
+                "expected one of: " + ", ".join(sorted([*SPEC_PHASES, "done"])))
+        self._batch(st, [
+            {"op": "update", "id": spec_id, "clear_waiting": True},
+            {"op": "annotate", "id": spec_id, "owner": ANNOTATION_OWNER,
+             "value": {"role": "spec", "run": st["run_id"], "phase": phase}},
+        ])
 
     def publish(self, run_dir, st: dict) -> dict:
         """Send every staged ticket (and new slices) in one Batch; returns provisional -> Task ID."""
@@ -409,12 +518,13 @@ class OrbitTicketStore:
         resolved = tracker.resolve(settings=settings)
         anchor = Path(resolved["settings"].get("orbit_dir") or Path(settings).parent.parent).expanduser()
         hold = resolved["names"]["hold"]
-        install = "install orbit with Batches and Annotations (0.11.0 or later)"
+        install = f"install orbit with Batches and Annotations ({MIN_ORBIT} or later)"
         later = "fix orbit-binary first"
         if not shutil.which("orbit") or subprocess.run(
                 ["orbit", "batch", "--help"], capture_output=True).returncode != 0:
             return [row("orbit-binary", "fail", install), row("orbit-board", "fail", later),
-                    row("orbit-schema", "fail", later), row("orbit-hold-label", "warn", later)]
+                    row("orbit-schema", "fail", later), row("orbit-depth", "fail", later),
+                    row("orbit-hold-label", "warn", later)]
         out = [row("orbit-binary", "pass")]
         try:
             schema = call(str(anchor), ["export"]).get("schema_version")
@@ -422,25 +532,58 @@ class OrbitTicketStore:
             fix = "set tracker_settings.orbit_dir or run orbit init in the repo"
             return out + [row("orbit-board", "fail", fix),
                           row("orbit-schema", "fail", "fix orbit-board first"),
+                          row("orbit-depth", "fail", "fix orbit-board first"),
                           row("orbit-hold-label", "warn", "fix orbit-board first")]
         out.append(row("orbit-board", "pass"))
         out.append(row("orbit-schema", "pass") if schema == SCHEMA_VERSION else
                    row("orbit-schema", "fail",
                        f"orbit export schema_version is {schema}, kinetic needs {SCHEMA_VERSION}"))
+        depth = _max_depth(anchor)
+        if depth is None:
+            out.append(row("orbit-depth", "warn",
+                           "could not read the Board's config.toml"))
+        else:
+            out.append(row("orbit-depth", "pass") if depth >= 2 else
+                       row("orbit-depth", "fail", DEPTH_FIX))
         out.append(row("orbit-hold-label", "pass") if hold in _hold_labels(anchor) else
                    row("orbit-hold-label", "warn",
                        f'add "{hold}" to non_ready_labels in the Board\'s config.toml'))
         return out
 
 
+def _config_candidates(anchor: Path) -> list:
+    """Wherever the Board layout keeps its config.toml."""
+    return [anchor / ".orbit" / "board" / "config.toml", anchor / ".orbit" / "config.toml",
+            anchor / "config.toml"]
+
+
+def _config_texts(anchor: Path):
+    """The text of each existing, readable config.toml candidate."""
+    for candidate in _config_candidates(anchor):
+        if candidate.is_file():
+            try:
+                yield candidate.read_text()
+            except OSError:
+                continue
+
+
+def _max_depth(anchor: Path) -> int | None:
+    """board.max_subtask_depth (Orbit's default is 1); None when no config is readable."""
+    saw_config = False
+    for text in _config_texts(anchor):
+        saw_config = True
+        m = re.search(r"max_subtask_depth\s*=\s*(\d+)", text)
+        if m:
+            return int(m.group(1))
+    return 1 if saw_config else None
+
+
 def _hold_labels(anchor: Path) -> list:
     """non_ready_labels from the Board's config.toml, wherever the layout keeps it."""
-    for candidate in (anchor / ".orbit" / "board" / "config.toml", anchor / ".orbit" / "config.toml",
-                      anchor / "config.toml"):
-        if candidate.is_file():
-            m = re.search(r"non_ready_labels\s*=\s*\[(.*?)\]", candidate.read_text(), re.S)
-            if m:
-                return re.findall(r'"([^"]+)"', m.group(1))
+    for text in _config_texts(anchor):
+        m = re.search(r"non_ready_labels\s*=\s*\[(.*?)\]", text, re.S)
+        if m:
+            return re.findall(r'"([^"]+)"', m.group(1))
     return []
 
 

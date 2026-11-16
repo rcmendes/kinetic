@@ -32,6 +32,13 @@ class TicketStore(Protocol):
     def publish(self, run_dir, st: dict) -> dict:
         """Publish staged tickets; returns provisional id -> final id."""
 
+    def publish_spec(self, run_dir, st: dict, title: str, body: str) -> dict:
+        """Publish the run's spec; returns {"ref": <spec reference>, "published": bool}."""
+
+    def sync_spec(self, run_dir, st: dict, event: str) -> None:
+        """Mirror a spec lifecycle event on the store: "gate-approved",
+        "gate-rejected", "building" (breakdown approved) or "done"."""
+
     def touch(self, run_dir, st: dict, ticket_id: str) -> None:
         """Signal that a running ticket's implementer is alive."""
 
@@ -53,6 +60,13 @@ class LocalTicketStore:
 
     def publish(self, run_dir, st: dict) -> dict:
         return {i: i for i in st.get("tickets", {})}
+
+    def publish_spec(self, run_dir, st: dict, title: str, body: str) -> dict:
+        # spec.md in the run directory is already the published spec
+        return {"ref": "spec.md", "published": False}
+
+    def sync_spec(self, run_dir, st: dict, event: str) -> None:
+        return None
 
     def touch(self, run_dir, st: dict, ticket_id: str) -> None:
         return None

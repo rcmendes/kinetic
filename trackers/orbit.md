@@ -1,22 +1,28 @@
 # Tracker adapter: Orbit
 
-Access: the `orbit` CLI, always with `--json` and `--dir <anchor>`. Optional setting: `orbit_dir` (`tracker_settings.orbit_dir`), the Board anchor or Board folder. Without it the anchor is the project folder (the one holding `.kinetic/`, `bare-repos/` and `runs/`). The Orbit Board needs `names.hold` (default `kinetic`) in `non_ready_labels` in its `config.toml`; doctor checks it.
+Access: the `orbit` CLI, always with `--json` and `--dir <anchor>`. Optional setting: `orbit_dir` (`tracker_settings.orbit_dir`), the Board anchor or Board folder. Without it the anchor is the project folder (the one holding `.kinetic/`, `bare-repos/` and `runs/`). The Orbit Board needs `names.hold` (default `kinetic`) in `non_ready_labels` and must allow three levels of nesting (`max_subtask_depth = 2` under `[board]`) in its `config.toml`; doctor checks both.
 
 With this tracker the run's tickets live on the Orbit Board: the Orbit ticket store reads and writes them, and kinetic state is not a separate copy. This adapter publishes staged tickets: during decompose, follow the Local steps (ticket files and `NN-<repo>-<slug>` ids); when the breakdown gate is approved, kinetic publishes every staged ticket in one `orbit batch`, and from then on a ticket id is its Orbit Task ID.
 
 Never edit Orbit Task files by hand, and never run `orbit ready --claim` for a kinetic ticket: kinetic schedules its own tickets.
 
-A run whose ref is an existing Orbit Task (for example `/kinetic:implement orb-a7b2c9`) does not take that Task over: kinetic never claims it, never moves its status and never closes it; the user does. Its only write to that Task is one comment naming the run folder. Orbit cannot nest the slices under it (a Parent Task of type `epic` is top-level only, and SubTasks are one level deep), so kinetic files its own slices and tickets for the run, and links the tickets to the original Task with `related`.
+A run whose ref is an existing Orbit Task (for example `/kinetic:implement orb-a7b2c9`) does not take that Task over: kinetic never claims it, never moves its status and never closes it; the user does. Its only write to that Task is one comment naming the run folder. The run's spec Task is a top-level `epic`, so it cannot nest under that Task either; kinetic files its own spec, slices and tickets for the run, and links the tickets to the original Task with `related`.
 
 After the breakdown gate, a ticket kinetic adds later (a `NEEDS_HUMAN` ticket, a review fix) goes to the Board in the same write that records it, and its provisional id keeps working with `kinetic state` commands.
 
 ## Operations
 
+### create spec
+`kinetic state publish-spec` (after spec lint) creates the run's spec Task: a top-level Task of type `epic` with Source Key `kinetic:<run id>:spec`, the labels `names.run`, `names.spec` and the hold label `names.hold`, the `kinetic` Annotation `{"role": "spec", "run": "<run id>", "phase": "awaiting-approval"}` and `waiting_on` "kinetic: spec approval" while the spec gate is open. Its body is a copy of `spec.md` whose first line says it is generated: edit the file and publish again; the same Source Key makes republishing rewrite the Task instead of adding another.
+
+### sync spec
+Done by kinetic, never by hand. Recording the spec gate (`kinetic state record-gate --gate spec`) updates the spec Task: approval clears `waiting_on` and sets the Annotation `phase` to `approved`, rejection clears it and sets `revising`, and publishing again puts `waiting_on` back with `phase` `awaiting-approval`. An approved breakdown gate sets `phase` to `building`, and the Batch that finishes the run's last slice marks the spec Task `done`.
+
 ### create slice parent
-Done by publishing: each slice becomes a Parent Task with type `epic`. When the run recorded a spec (`kinetic state set-spec`), the slice also carries it in its `kinetic` Annotation (`{"spec": "<ref>"}`), so `orbit show <slice>` names the spec; with no spec recorded the Annotation is not written. Orbit itself has no spec concept: nothing changes for Boards that kinetic does not use.
+Done by publishing. When the run has a spec Task (see create spec), each slice becomes a plain Task nested under it, with the `kinetic` Annotation `{"role": "slice", "spec": "<spec task id>"}` — spec, slice and ticket are three levels, which needs `max_subtask_depth = 2` in the Board's `config.toml`, checked by doctor. Runs published before spec Tasks existed keep the old shape: each slice is a Parent Task with type `epic`. When the run recorded a spec (`kinetic state set-spec`), the slice also carries it in its `kinetic` Annotation (`{"spec": "<ref>"}`), so `orbit show <slice>` names the spec; with no spec recorded the Annotation is not written. Orbit itself has no spec concept: nothing changes for Boards that kinetic does not use.
 
 ### create child
-Record the ticket with `kinetic state set-ticket` (it is staged); publishing makes it a SubTask of its slice's Parent Task.
+Record the ticket with `kinetic state set-ticket` (it is staged); publishing makes it a SubTask of its slice Task, with every ticket field in its `kinetic` Annotation.
 
 ### link blocker
 Record `blocked_by` with its edge type with `set-ticket`. The ticket store writes an Orbit dependency and keeps the edge type in the ticket's `kinetic` Annotation.
@@ -59,6 +65,7 @@ The Orbit Task ID, for example `orb-a7b2c9.d4b3df`.
   "related": "",
   "status": {"todo": "todo", "running": "in_progress", "done": "done", "merged": "done", "blocked": "in_progress"},
   "hold": "kinetic",
-  "run": "kinetic-run-<run id>"
+  "run": "kinetic-run-<run id>",
+  "spec": "kinetic-spec"
 }
 ```

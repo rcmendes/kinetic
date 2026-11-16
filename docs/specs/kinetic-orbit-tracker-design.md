@@ -53,7 +53,8 @@ Each tool keeps its own words. This table is the only place where they meet, and
 | Concept | kinetic term | Orbit term |
 |---|---|---|
 | one unit of work | ticket | Task (a SubTask, here) |
-| a group of tickets | slice | Parent Task with Type `epic` |
+| the run's spec | spec | top-level Task with Type `epic` (the spec Task) |
+| a group of tickets | slice | Task nested under the spec Task (a Parent Task; runs published before spec Tasks keep Type `epic`) |
 | a ticket that must finish first | blocker (`blocked_by`, with an edge type) | Dependency |
 | exclusive ownership while working | running ticket | Claim, valid during its Lease |
 | owner of the work went silent | stuck implementer | Stale |
@@ -116,11 +117,12 @@ The interface, in kinetic's terms only:
 - **read:** every ticket of the run, staged ones included, in one call.
 - **write:** a batch of ticket changes that applies fully or not at all.
 - **stage** and **publish:** see "Decompose flow".
+- **publish spec** and **sync spec:** publish `<run_dir>/spec.md` as the run's spec Task and mirror the spec gate and the run's end onto it.
 - **touch:** signal that a running ticket's implementer is alive.
 - **liveness:** for a running ticket, `alive`, `stuck` or `unknown`.
 - **health:** the doctor checks this implementation needs, each with a status and a one-line fix.
 
-The local ticket store writes on `stage` exactly as `set-ticket` does today, treats `publish` and `touch` as no-ops, answers `unknown` for liveness, and has no health checks. Kinetic shows `unknown` as nothing, so local runs look as they do today.
+The local ticket store writes on `stage` exactly as `set-ticket` does today, treats `publish` and `touch` as no-ops, keeps the spec at `spec.md` (`publish_spec` returns it, `sync_spec` does nothing), answers `unknown` for liveness, and has no health checks. Kinetic shows `unknown` as nothing, so local runs look as they do today.
 
 Comments stay a tracker adapter operation, as today: the local tracker adapter writes them into the ticket file, and `trackers/orbit.md` uses `orbit comment add`.
 
@@ -157,8 +159,9 @@ Doctor adds the chosen ticket store's health checks to its table, and stays unaw
 
 | kinetic | Orbit |
 |---|---|
-| slice | Parent Task with Type `epic` |
-| ticket | SubTask of its slice's Parent Task |
+| spec | top-level Task with Type `epic`; Source Key `kinetic:<run id>:spec`; the spec gate is mirrored on its `kinetic` Annotation |
+| slice | Task with the spec Task as parent (Type `epic` only for runs published before spec Tasks) |
+| ticket | SubTask of its slice Task |
 | ticket id | Task ID |
 | provisional ticket id | Source Key `kinetic:<run id>:<provisional id>` |
 | all ticket fields | Annotation owned by `kinetic`, which is authoritative |
@@ -187,7 +190,7 @@ The Annotation holds kinetic's exact status. The Orbit Status, Claim, Waiting an
 
 - **The Hold Label** keeps other Agents' `orbit ready --claim` away from kinetic's agent tickets while they are `todo`. Kinetic removes it and Claims in one Batch when it dispatches a ticket. An `in_progress` Task is never Ready, so it needs no Hold Label. Only an explicit `orbit claim --steal` can take it.
 - **Resuming** a `needs_decision` or `blocked` ticket clears Waiting and renews the Claim by the same holder in the Batch that sets `running`. Liveness reports `stuck` only for `running` tickets.
-- **Slice Parent Tasks** are closed by kinetic with `done`, in the same Batch that completes their last open SubTask.
+- **Slice Parent Tasks** are closed by kinetic with `done`, in the same Batch that completes their last open SubTask; the spec Task is closed in the Batch that finishes the last slice.
 - **Human tickets** are finished with `orbit done <id>`, which works on an unclaimed Task. When a read shows a human ticket that is Done in Orbit while its Annotation status is still `todo`, the read records `status: done` and `done_by: human` in one Batch.
 - **An agent ticket marked Done outside kinetic** has no passing verify, so kinetic does not treat it as done. The read sets it to `needs_decision` with the note "marked done outside kinetic".
 

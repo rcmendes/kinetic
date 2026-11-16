@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import multiprocessing
 import os
 import subprocess
@@ -7,8 +8,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from kinetic import state
+from kinetic import state, ticket_store
 
 
 def _writer(args):
@@ -297,6 +299,135 @@ class StateTest(unittest.TestCase):
             state.set_ticket(self.run_dir, "T1", blocked_by=[{"type": "merge"}])
 
 
+class PublishSpecTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.run_dir = Path(self._tmp.name) / "run"
+        state.init(self.run_dir, "feature", "F-1")
+
+    def _write_spec(self, body="# Export CSV\n\nThe spec body.\n"):
+        (self.run_dir / "spec.md").write_text(body)
+
+    def test_publish_spec_records_ref_and_returns_the_store_result(self):
+        self._write_spec()
+        result = state.publish_spec(self.run_dir, "Export CSV")
+        self.assertEqual(result, {"ref": "spec.md", "published": False})
+        self.assertEqual(state.load(self.run_dir)["spec"], "spec.md")
+
+    def test_publish_spec_records_the_ref_the_store_returned(self):
+        self._write_spec()
+        published = []
+
+        class StubStore:
+            def publish_spec(self, run_dir, st, title, body):
+                published.append((title, body))
+                return {"ref": "TASK-9", "published": True}
+
+        with mock.patch.object(ticket_store, "for_state", return_value=StubStore()):
+            result = state.publish_spec(self.run_dir, "Export CSV")
+        self.assertEqual(result, {"ref": "TASK-9", "published": True})
+        self.assertEqual(state.load(self.run_dir)["spec"], "TASK-9")
+        self.assertEqual(published, [("Export CSV", "# Export CSV\n\nThe spec body.\n")])
+
+    def test_publish_spec_fails_without_spec_md(self):
+        with self.assertRaisesRegex(OSError, "spec.md"):
+            state.publish_spec(self.run_dir, "Export CSV")
+        self.assertIsNone(state.load(self.run_dir)["spec"])
+
+    def test_publish_spec_fails_on_empty_spec_md(self):
+        for body in ("", "  \n\t\n"):
+            with self.subTest(body=body):
+                self._write_spec(body)
+                with self.assertRaisesRegex(ValueError, "empty"):
+                    state.publish_spec(self.run_dir, "Export CSV")
+        self.assertIsNone(state.load(self.run_dir)["spec"])
+
+
+class SpecGateSyncTest(unittest.TestCase):
+    """record_gate mirrors the spec lifecycle on the run's ticket store."""
+
+    class SpyStore:
+        def __init__(self):
+            self.events = []
+            self.published = 0
+
+        def read(self, run_dir, st):
+            return {}
+
+        def write(self, run_dir, st, before, after):
+            pass
+
+        def publish(self, run_dir, st):
+            self.published += 1
+            return {}
+
+        def sync_spec(self, run_dir, st, event):
+            self.events.append(event)
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.run_dir = Path(self._tmp.name) / "run"
+        self.store = self.SpyStore()
+        patcher = mock.patch.object(ticket_store, "for_state", return_value=self.store)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _init(self, record=None):
+        state.init(self.run_dir, "feature", "F-1",
+                   ticket_store_record=record or {"kind": "spy", "config": {}})
+
+    def test_spec_gate_approved_syncs_gate_approved(self):
+        self._init()
+        state.record_gate(self.run_dir, "spec", True)
+        self.assertEqual(self.store.events, ["gate-approved"])
+        self.assertTrue(state.load(self.run_dir)["gates"]["spec"]["approved"])
+
+    def test_spec_gate_rejected_syncs_gate_rejected(self):
+        self._init()
+        state.record_gate(self.run_dir, "spec", False, "revise")
+        self.assertEqual(self.store.events, ["gate-rejected"])
+        self.assertFalse(state.load(self.run_dir)["gates"]["spec"]["approved"])
+
+    def test_breakdown_approval_syncs_building(self):
+        self._init()
+        state.record_gate(self.run_dir, "breakdown", True)
+        self.assertEqual(self.store.published, 1)
+        self.assertEqual(self.store.events, ["building"])
+
+    def test_breakdown_rejection_and_other_gates_do_not_sync(self):
+        self._init()
+        state.record_gate(self.run_dir, "breakdown", False)
+        state.record_gate(self.run_dir, "review", True)
+        state.record_gate(self.run_dir, "ship", True)
+        self.assertEqual(self.store.events, [])
+        self.assertEqual(self.store.published, 0)
+
+    def test_store_failure_raises_after_the_gate_is_recorded(self):
+        class FailingStore(self.SpyStore):
+            def sync_spec(self, run_dir, st, event):
+                raise ticket_store.TicketStoreError("orbit BOARD_NOT_FOUND: gone")
+
+        self._init()
+        patcher = mock.patch.object(ticket_store, "for_state",
+                                    return_value=FailingStore())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        with self.assertRaises(ticket_store.TicketStoreError):
+            state.record_gate(self.run_dir, "spec", True)
+        self.assertTrue(state.load(self.run_dir)["gates"]["spec"]["approved"])
+
+    def test_local_run_calls_none_of_this(self):
+        self._init({"kind": "local"})
+        with mock.patch.object(ticket_store.LocalTicketStore, "sync_spec") as sync:
+            state.record_gate(self.run_dir, "spec", True)
+            state.record_gate(self.run_dir, "spec", False)
+            state.record_gate(self.run_dir, "breakdown", True)
+        sync.assert_not_called()
+        self.assertEqual(self.store.events, [])
+
+
 class CliTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -381,6 +512,20 @@ class CliTest(unittest.TestCase):
         self.assertEqual(self.cli("set-spec", "--ref", "PROJ-7").returncode, 0)
         self.assertEqual(state.load(self.run_dir)["spec"], "PROJ-7")
         self.assertNotEqual(self.cli("set-spec", "--ref", "").returncode, 0)
+
+    def test_publish_spec_cli_prints_the_store_result(self):
+        self.cli("init", "--lane", "feature", "--ref", "F")
+        (Path(self.run_dir) / "spec.md").write_text("# Spec\n\nbody\n")
+        r = self.cli("publish-spec", "--title", "My spec")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), {"ref": "spec.md", "published": False})
+        self.assertEqual(state.load(self.run_dir)["spec"], "spec.md")
+
+    def test_publish_spec_cli_fails_without_spec_md(self):
+        self.cli("init", "--lane", "feature", "--ref", "F")
+        r = self.cli("publish-spec", "--title", "My spec")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("spec.md", r.stderr)
 
     def test_bad_edge_type_and_missing_equals_fail(self):
         self.cli("init", "--lane", "epic", "--ref", "E")

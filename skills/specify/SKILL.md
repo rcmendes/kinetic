@@ -30,11 +30,16 @@ kinetic spec_lint <run_dir>/spec.md
 
 It prints a JSON list of problems. Fix the spec and re-run until the list is empty (`[]`).
 
-5. Publish:
-   - **Tracker with remote issues**: follow the adapter's "create slice parent" operation with the spec body, and note the ticket reference at the top of `<run_dir>/spec.md`.
-   - **Local**: `<run_dir>/spec.md` is the published spec.
+5. Publish it through the run's ticket store:
 
-   Then record where the spec lives so `kinetic trace` can walk spec, slices and tickets: `kinetic state set-spec --run <run_dir> --ref <ref>`, with `<ref>` the ticket reference from the adapter, or `spec.md` when it is local.
+```
+kinetic state publish-spec --run <run_dir> --title "<title>"
+```
+
+It prints `{"ref": ..., "published": ...}` and records `ref` as the run's spec, so `kinetic trace` can walk spec, slices and tickets.
+
+   - **`"published": true`**: the spec is on the ticket store's tracker; nothing more is needed.
+   - **`"published": false`**: publish through the adapter as before — **tracker with remote issues**: follow the adapter's "create slice parent" operation with the spec body, and note the ticket reference at the top of `<run_dir>/spec.md`; **local**: `<run_dir>/spec.md` is the published spec. Then record where the spec lives: `kinetic state set-spec --run <run_dir> --ref <ref>`, with `<ref>` the ticket reference from the adapter, or `spec.md` when it is local.
 
 The orchestrator then runs the spec approval gate; do not set phases or gates here.
 
