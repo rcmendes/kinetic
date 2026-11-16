@@ -362,6 +362,16 @@ def orbit_json(board: Path, *args) -> dict:
     return json.loads(out.stdout)["data"]
 
 
+def deep_board(board: Path) -> None:
+    """Let the Board nest SubTasks (spec > slice > ticket) and hold the `kinetic` label."""
+    config = board / ".orbit" / "board" / "config.toml"
+    text = config.read_text()
+    text = text.replace("[board]", "[board]\nmax_subtask_depth = 2", 1)
+    text = re.sub(r"non_ready_labels\s*=\s*\[[^]]*\]",
+                  'non_ready_labels = ["kinetic", "ready-for-human"]', text)
+    config.write_text(text)
+
+
 @unittest.skipUnless(orbit_available(), SKIP_REASON)
 class OrbitContractTest(TicketStoreContract, unittest.TestCase):
     """The ticket store contract against a real Orbit Board."""
@@ -506,6 +516,54 @@ class OrbitPublishTest(unittest.TestCase):
         tickets = state.load(self.run_dir)["tickets"]
         self.assertTrue(all(not i.startswith("0") for i in tickets), tickets)
         self.assertEqual(len(tickets), 2)
+
+
+@unittest.skipUnless(orbit_available(), SKIP_REASON)
+class OrbitSpecPublishTest(unittest.TestCase):
+    """The run's spec is one epic Task on the Board, rewritten by republishing."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.run_dir, self.board = make_orbit_run(Path(self._tmp.name))
+        deep_board(self.board)
+        (self.run_dir / "spec.md").write_text("# Spec\n\nBuild the exporter.\n")
+
+    def test_publish_spec_creates_the_epic_task(self):
+        result = state.publish_spec(self.run_dir, "Export CSV")
+        self.assertTrue(result["published"])
+        st = state.load(self.run_dir)
+        run_id, task_id = st["run_id"], result["ref"]
+        self.assertEqual(st["spec"], task_id)
+        self.assertEqual(st["ticket_store"]["config"]["spec_task"], task_id)
+        shown = orbit_json(self.board, "show", task_id)
+        self.assertEqual((shown["type"], shown["title"]), ("epic", "Export CSV"))
+        self.assertIsNone(shown["parent"])
+        self.assertEqual(shown["source_key"], f"kinetic:{run_id}:spec")
+        self.assertEqual(shown["waiting_on"], "kinetic: spec approval")
+        self.assertTrue(shown["body"].splitlines()[0].startswith("generated from spec.md"),
+                        shown["body"])
+        self.assertIn("Build the exporter.", shown["body"])
+        self.assertEqual(shown["annotations"]["kinetic"],
+                         {"role": "spec", "run": run_id, "phase": "awaiting-approval"})
+        for label in (f"kinetic-run-{run_id}", "kinetic-spec", "kinetic"):
+            self.assertIn(label, shown["labels"])
+
+    def test_publish_spec_twice_rewrites_the_body(self):
+        first = state.publish_spec(self.run_dir, "Export CSV")["ref"]
+        (self.run_dir / "spec.md").write_text("# Spec\n\nBuild the bigger exporter.\n")
+        second = state.publish_spec(self.run_dir, "Export CSV")["ref"]
+        self.assertEqual(first, second)
+        shown = orbit_json(self.board, "show", second)
+        self.assertIn("Build the bigger exporter.", shown["body"])
+        self.assertEqual(orbit_json(self.board, "list", "--type", "epic")["count"], 1)
+
+    def test_spec_is_an_epic_the_ready_queue_never_offers(self):
+        task_id = state.publish_spec(self.run_dir, "Export CSV")["ref"]
+        epics = orbit_json(self.board, "list", "--type", "epic")
+        self.assertEqual([t["id"] for t in epics["tasks"]], [task_id])
+        ready = orbit_json(self.board, "ready")
+        self.assertNotIn(task_id, [t["id"] for t in ready["tasks"]])
 
 
 if __name__ == "__main__":

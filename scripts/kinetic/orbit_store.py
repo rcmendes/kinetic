@@ -25,6 +25,8 @@ MIN_ORBIT = "0.10.16"  # Batches, Annotations and nested SubTasks (board.max_sub
 DEPTH_FIX = "add max_subtask_depth = 2 under [board] in the Board's config.toml"
 DONE = ("done", "done_with_concerns", "merged", "released")
 PAUSED = ("needs_decision", "blocked")
+SPEC_WAITING = "kinetic: spec approval"  # set while the spec gate is open
+SPEC_GENERATED = "generated from spec.md; edit the file, then publish-spec again"
 # Keys read() adds that are not ticket fields and are never written back.
 DERIVED = ("liveness",)
 
@@ -378,6 +380,36 @@ class OrbitTicketStore:
             if finished and just:
                 ops.append({"op": "done", "id": slice_id, "by": holder(st["run_id"])})
         return ops
+
+    def spec_ops(self, run_dir, st: dict, title: str, body: str) -> list:
+        """Batch operations publishing the run's spec Task: one `add` whose Source Key
+        matches the Task when it exists, so the ops that follow rewrite it either way."""
+        run_id, names = st["run_id"], self._names(st)
+        key = source_key(run_id, "spec")
+        ref = f"key:{key}"
+        labels = sorted({run_label(run_id, names), names.get("spec") or "kinetic-spec",
+                         names["hold"]})
+        annotation = {"role": "spec", "run": run_id, "phase": "awaiting-approval"}
+        text = f"{SPEC_GENERATED}\n\n{body}"
+        return [
+            {"op": "add", "key": key, "title": title, "type": "epic",
+             "labels": labels, "waiting_on": SPEC_WAITING, "body": text,
+             "annotations": {ANNOTATION_OWNER: annotation}},
+            {"op": "update", "id": ref, "title": title, "body": text,
+             "waiting_on": SPEC_WAITING},
+            {"op": "annotate", "id": ref, "owner": ANNOTATION_OWNER, "value": annotation},
+            {"op": "label", "id": ref, "add": labels},
+        ]
+
+    def publish_spec(self, run_dir, st: dict, title: str, body: str) -> dict:
+        """Publish the spec as the run's epic spec Task; republishing rewrites it."""
+        keys = self._batch(st, self.spec_ops(run_dir, st, title, body)).get("keys", {})
+        ref = keys[source_key(st["run_id"], "spec")]
+        self.config["spec_task"] = ref
+        return {"ref": ref, "published": True}
+
+    def sync_spec(self, run_dir, st: dict, event: str) -> None:
+        return None  # spec lifecycle mirroring lands with the record_gate hooks
 
     def publish(self, run_dir, st: dict) -> dict:
         """Send every staged ticket (and new slices) in one Batch; returns provisional -> Task ID."""
