@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from kinetic import orbit_store, state, ticket_store
+from kinetic import graph, orbit_store, state, ticket_store, trace
 from kinetic.tracker import ROOT, adapter_defaults
 
 from tests.test_ticket_store import TicketStoreContract
@@ -727,6 +727,64 @@ class OrbitSpecSyncTest(unittest.TestCase):
                 state.record_gate(self.run_dir, "spec", True)
         self.assertTrue(state.load(self.run_dir)["gates"]["spec"]["approved"])
         self.assertEqual(self.shown()["waiting_on"], "kinetic: spec approval")
+
+
+@unittest.skipUnless(orbit_available(), SKIP_REASON)
+class OrbitSpecEndToEndTest(unittest.TestCase):
+    """The whole run on a real Board: spec epic > slice Tasks > ticket Tasks."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.run_dir, self.board = make_orbit_run(Path(self._tmp.name))
+        (self.run_dir / "spec.md").write_text("# Spec\n\nBuild the exporter.\n")
+
+    def test_full_cycle_spec_slice_tickets(self):
+        deep_board(self.board)
+        spec_id = state.publish_spec(self.run_dir, "Export CSV")["ref"]
+        self.assertEqual(state.load(self.run_dir)["spec"], spec_id)
+        state.record_gate(self.run_dir, "spec", True)
+        shown = orbit_json(self.board, "show", spec_id)
+        self.assertIsNone(shown["waiting_on"])
+        self.assertEqual(shown["annotations"]["kinetic"]["phase"], "approved")
+        stage_two(self.run_dir)
+        # Staged, not yet on the Board: only the spec Task exists.
+        self.assertTrue((self.run_dir / ".kinetic" / "tickets.staged.json").exists())
+        self.assertEqual(orbit_json(self.board, "list", "--include-closed")["count"], 1)
+        state.record_gate(self.run_dir, "breakdown", True)  # publishes the staged tree
+        st = state.load(self.run_dir)
+        (core,) = st["slices"]
+        tickets = graph.topo_order(st["tickets"])  # 02-web-b is blocked by 01-api-a
+        self.assertEqual(len(tickets), 2)
+        self.assertEqual(orbit_json(self.board, "show", spec_id)
+                         ["annotations"]["kinetic"]["phase"], "building")
+        for tid in tickets:
+            state.set_ticket(self.run_dir, tid, status="running")
+            state.set_ticket(self.run_dir, tid, status="done")
+        self.assertEqual(orbit_json(self.board, "show", core)["status"], "done")
+        self.assertEqual(orbit_json(self.board, "show", spec_id)["status"], "done")
+        # kinetic trace and orbit tree agree on spec > slice > tickets.
+        tree = trace.build(state.load(self.run_dir))
+        self.assertEqual(tree["spec"], spec_id)
+        self.assertEqual(tree["slices"], [{"id": core, "tickets": sorted(tickets)}])
+        self.assertEqual(tree["unsliced"], [])
+        orbit_tree = orbit_json(self.board, "tree", spec_id)["tasks"]
+        self.assertEqual({t["id"]: t["depth"] for t in orbit_tree},
+                         {spec_id: 0, core: 1, tickets[0]: 2, tickets[1]: 2})
+
+    def test_depth_one_board_refuses_publish_spec_with_the_fix(self):
+        # orbit init leaves max_subtask_depth unset: SubTasks nest one level.
+        with self.assertRaises(ticket_store.TicketStoreError) as caught:
+            state.publish_spec(self.run_dir, "Export CSV")
+        self.assertIn(orbit_store.DEPTH_FIX, str(caught.exception))
+        # Nothing half-written: no Task on the Board, no spec ref in state.
+        self.assertEqual(orbit_json(self.board, "list", "--include-closed")["count"], 0)
+        self.assertIsNone(state.load(self.run_dir)["spec"])
+        deep_board(self.board)  # the fix the message names
+        ref = state.publish_spec(self.run_dir, "Export CSV")["ref"]
+        shown = orbit_json(self.board, "show", ref)
+        self.assertEqual((shown["type"], shown["title"]), ("epic", "Export CSV"))
+        self.assertEqual(state.load(self.run_dir)["spec"], ref)
 
 
 if __name__ == "__main__":
