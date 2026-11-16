@@ -21,6 +21,8 @@ ANNOTATION_OWNER = "kinetic"
 LOCK_RETRIES = (0.2, 0.4, 0.8)
 STAGED = "tickets.staged.json"
 SCHEMA_VERSION = 3  # orbit export schema with Annotations and Source Keys
+MIN_ORBIT = "0.10.16"  # Batches, Annotations and nested SubTasks (board.max_subtask_depth)
+DEPTH_FIX = "add max_subtask_depth = 2 under [board] in the Board's config.toml"
 DONE = ("done", "done_with_concerns", "merged", "released")
 PAUSED = ("needs_decision", "blocked")
 # Keys read() adds that are not ticket fields and are never written back.
@@ -43,7 +45,7 @@ def call(anchor: str, args: list, stdin: str | None = None) -> dict:
             done = subprocess.run(cmd, input=stdin, capture_output=True, text=True, cwd=cwd)
         except FileNotFoundError:
             raise OrbitStoreError("NOT_INSTALLED", "the orbit command was not found",
-                                  "install orbit with Batches and Annotations (0.11.0 or later)")
+                                  f"install orbit with Batches and Annotations ({MIN_ORBIT} or later)")
         try:
             envelope = json.loads(done.stdout or "{}")
         except ValueError:
@@ -55,12 +57,14 @@ def call(anchor: str, args: list, stdin: str | None = None) -> dict:
         if code == "LOCKED" and delay is not None:
             time.sleep(delay)
             continue
-        raise OrbitStoreError(code, error.get("message") or done.stderr.strip()[:500],
-                              _fix(code))
+        message = error.get("message") or done.stderr.strip()[:500]
+        raise OrbitStoreError(code, message, _fix(code, message))
     raise AssertionError("unreachable")
 
 
-def _fix(code: str) -> str:
+def _fix(code: str, message: str = "") -> str:
+    if code == "INVALID_ARGUMENT" and "board.max_subtask_depth" in message:
+        return DEPTH_FIX
     return {
         "LOCKED": "another orbit command holds the Board lock; retry",
         "BOARD_NOT_FOUND": "set tracker_settings.orbit_dir or run orbit init in the repo",
@@ -409,12 +413,13 @@ class OrbitTicketStore:
         resolved = tracker.resolve(settings=settings)
         anchor = Path(resolved["settings"].get("orbit_dir") or Path(settings).parent.parent).expanduser()
         hold = resolved["names"]["hold"]
-        install = "install orbit with Batches and Annotations (0.11.0 or later)"
+        install = f"install orbit with Batches and Annotations ({MIN_ORBIT} or later)"
         later = "fix orbit-binary first"
         if not shutil.which("orbit") or subprocess.run(
                 ["orbit", "batch", "--help"], capture_output=True).returncode != 0:
             return [row("orbit-binary", "fail", install), row("orbit-board", "fail", later),
-                    row("orbit-schema", "fail", later), row("orbit-hold-label", "warn", later)]
+                    row("orbit-schema", "fail", later), row("orbit-depth", "fail", later),
+                    row("orbit-hold-label", "warn", later)]
         out = [row("orbit-binary", "pass")]
         try:
             schema = call(str(anchor), ["export"]).get("schema_version")
@@ -422,25 +427,58 @@ class OrbitTicketStore:
             fix = "set tracker_settings.orbit_dir or run orbit init in the repo"
             return out + [row("orbit-board", "fail", fix),
                           row("orbit-schema", "fail", "fix orbit-board first"),
+                          row("orbit-depth", "fail", "fix orbit-board first"),
                           row("orbit-hold-label", "warn", "fix orbit-board first")]
         out.append(row("orbit-board", "pass"))
         out.append(row("orbit-schema", "pass") if schema == SCHEMA_VERSION else
                    row("orbit-schema", "fail",
                        f"orbit export schema_version is {schema}, kinetic needs {SCHEMA_VERSION}"))
+        depth = _max_depth(anchor)
+        if depth is None:
+            out.append(row("orbit-depth", "warn",
+                           "could not read the Board's config.toml"))
+        else:
+            out.append(row("orbit-depth", "pass") if depth >= 2 else
+                       row("orbit-depth", "fail", DEPTH_FIX))
         out.append(row("orbit-hold-label", "pass") if hold in _hold_labels(anchor) else
                    row("orbit-hold-label", "warn",
                        f'add "{hold}" to non_ready_labels in the Board\'s config.toml'))
         return out
 
 
+def _config_candidates(anchor: Path) -> list:
+    """Wherever the Board layout keeps its config.toml."""
+    return [anchor / ".orbit" / "board" / "config.toml", anchor / ".orbit" / "config.toml",
+            anchor / "config.toml"]
+
+
+def _config_texts(anchor: Path):
+    """The text of each existing, readable config.toml candidate."""
+    for candidate in _config_candidates(anchor):
+        if candidate.is_file():
+            try:
+                yield candidate.read_text()
+            except OSError:
+                continue
+
+
+def _max_depth(anchor: Path) -> int | None:
+    """board.max_subtask_depth (Orbit's default is 1); None when no config is readable."""
+    saw_config = False
+    for text in _config_texts(anchor):
+        saw_config = True
+        m = re.search(r"max_subtask_depth\s*=\s*(\d+)", text)
+        if m:
+            return int(m.group(1))
+    return 1 if saw_config else None
+
+
 def _hold_labels(anchor: Path) -> list:
     """non_ready_labels from the Board's config.toml, wherever the layout keeps it."""
-    for candidate in (anchor / ".orbit" / "board" / "config.toml", anchor / ".orbit" / "config.toml",
-                      anchor / "config.toml"):
-        if candidate.is_file():
-            m = re.search(r"non_ready_labels\s*=\s*\[(.*?)\]", candidate.read_text(), re.S)
-            if m:
-                return re.findall(r'"([^"]+)"', m.group(1))
+    for text in _config_texts(anchor):
+        m = re.search(r"non_ready_labels\s*=\s*\[(.*?)\]", text, re.S)
+        if m:
+            return re.findall(r'"([^"]+)"', m.group(1))
     return []
 
 
