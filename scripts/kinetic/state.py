@@ -9,6 +9,7 @@ import shlex
 import sys
 import tempfile
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -81,12 +82,19 @@ def save(run_dir, state: dict) -> None:
     atomic_write(_file(run_dir), json.dumps(state, indent=2, sort_keys=True))
 
 
-def _mutate(run_dir, fn, tickets: bool = True) -> dict:
-    """Exclusive-locked load -> fn(state) -> save; returns the saved state.
-    tickets=False changes run-level fields only, without reading the ticket store."""
+@contextmanager
+def _locked(run_dir):
+    """The run's state.lock held exclusively inside the with block."""
     internal(run_dir).mkdir(parents=True, exist_ok=True)
     with open(internal(run_dir) / "state.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def _mutate(run_dir, fn, tickets: bool = True) -> dict:
+    """Exclusive-locked load -> fn(state) -> save; returns the saved state.
+    tickets=False changes run-level fields only, without reading the ticket store."""
+    with _locked(run_dir):
         state = load(run_dir, tickets=tickets)
         before = copy.deepcopy(state.get("tickets", {}))
         fn(state)
@@ -117,15 +125,13 @@ def init(run_dir, lane: str, ref: str, force: bool = False,
          ticket_store_record: dict | None = None) -> dict:
     if lane not in LANES:
         raise ValueError(f"invalid lane '{lane}': expected one of {LANES}")
-    internal(run_dir).mkdir(parents=True, exist_ok=True)
     state = {
         "run_id": uuid.uuid4().hex[:12], "run_dir": str(run_dir), "lane": lane,
         "ref": ref, "spec": None, "phase": "intake", "tickets": {}, "slices": [], "repos": {},
         "gates": {}, "rulings": [], "verify": {}, "last_edit_at": None,
         "ticket_store": ticket_store_record or dict(ticket_store.LOCAL),
     }
-    with open(internal(run_dir) / "state.lock", "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with _locked(run_dir):
         if _file(run_dir).exists() and not force:
             raise FileExistsError(f"state already exists in {run_dir}; use force to overwrite")
         save(run_dir, state)
@@ -136,8 +142,7 @@ def set_ticket_store(run_dir, record: dict) -> dict:
     """Pick the run's ticket store; refused once the run has tickets, which would be stranded."""
     if not isinstance(record, dict):
         raise ValueError("ticket store record must be a JSON object")
-    with open(internal(run_dir) / "state.lock", "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with _locked(run_dir):
         st = load(run_dir)
         if st.get("tickets"):
             raise ValueError("the run already has tickets; its ticket store cannot change")
@@ -454,8 +459,7 @@ def _sync_spec(run_dir, st: dict, gate: str, approved: bool) -> None:
 def publish_tickets(run_dir) -> dict:
     """Publish staged tickets through the run's ticket store; returns provisional -> final id.
     A no-op for the local ticket store."""
-    with open(internal(run_dir) / "state.lock", "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with _locked(run_dir):
         state = load(run_dir)
         mapping = ticket_store.for_state(state).publish(run_dir, state)
         if mapping and not ticket_store.is_local(state):
@@ -475,8 +479,7 @@ def publish_spec(run_dir, title: str) -> dict:
     body = spec.read_text()
     if not body.strip():
         raise ValueError(f"{spec} is empty; write the spec first")
-    with open(internal(run_dir) / "state.lock", "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with _locked(run_dir):
         state = load(run_dir)
         result = ticket_store.for_state(state).publish_spec(run_dir, state, title, body)
         ref = result.get("ref")

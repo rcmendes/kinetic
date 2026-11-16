@@ -208,9 +208,13 @@ def _role(task: dict):
     return ((task.get("annotations") or {}).get(ANNOTATION_OWNER) or {}).get("role")
 
 
-def _is_slice(task: dict) -> bool:
-    """A slice Task: role "slice" (spec-Task runs) or, for old runs, an epic."""
-    return _role(task) == "slice" or (task.get("type") == "epic" and _role(task) != "spec")
+def _is_slice(task: dict, label: str) -> bool:
+    """A slice Task: role "slice" (spec-Task runs) or, for old runs, an epic
+    carrying the run label."""
+    if _role(task) == "slice":
+        return True
+    return (task.get("type") == "epic" and _role(task) != "spec"
+            and label in (task.get("labels") or []))
 
 
 class OrbitTicketStore:
@@ -228,11 +232,19 @@ class OrbitTicketStore:
             raise OrbitStoreError("BOARD_NOT_FOUND", str(e), "run from inside a kinetic project")
 
     def _names(self, st: dict) -> dict:
-        if not self.config.get("names"):
+        names = self.config.get("names")
+        if not names:
             from kinetic import tracker
             cfg = self._project(st) / ".kinetic" / "config.json"
-            self.config["names"] = tracker.resolve(settings=cfg)["names"]
-        return self.config["names"]
+            names = tracker.resolve(settings=cfg)["names"]
+        else:
+            # Names persisted before newer tracker adapter defaults (e.g.
+            # "spec") lack them; re-merge over the same base resolve() uses.
+            from kinetic import tracker
+            path = Path(tracker.ROOT) / "trackers" / "orbit.md"
+            names = tracker._merge(tracker.adapter_defaults(path), names)
+        self.config["names"] = names
+        return names
 
     def _anchor(self, st: dict) -> str:
         if not self.config.get("anchor"):
@@ -278,8 +290,9 @@ class OrbitTicketStore:
         if not self.config.get("anchor") and not st.get("repos"):
             return {}  # nothing published before the run has a Board
         run_id, names = st["run_id"], self._names(st)
+        label = run_label(run_id, names)
         data = call(self._anchor(st), ["list", "--include-closed", "--all",
-                                       "--label", run_label(run_id, names)])
+                                       "--label", label])
         tasks = data.get("tasks", [])
         prefix = source_key(run_id, "")
         ids = {task["source_key"][len(prefix):]: task["id"] for task in tasks
@@ -292,11 +305,11 @@ class OrbitTicketStore:
             self.config["published"] = True
             self.config["published_slices"] = sorted(
                 task["id"] for task in tasks
-                if _is_slice(task) and task["id"] in ids.values())
+                if _is_slice(task, label) and task["id"] in ids.values())
             st["slices"] = [ids.get(s, s) for s in st.get("slices", [])]
         tickets, fixes = {}, []
         for task in tasks:
-            if _is_slice(task) or _role(task) == "spec":
+            if _is_slice(task, label) or _role(task) == "spec":
                 continue
             t = _rewrite(to_ticket(task), ids)
             if not t:
@@ -407,7 +420,10 @@ class OrbitTicketStore:
                 ops.append({"op": "done", "id": slice_id, "by": holder(st["run_id"])})
         spec_id = self.config.get("spec_task")
         # Orbit refuses `done` on a Task with open SubTasks, so the spec closes
-        # only once every published slice's tickets are done.
+        # only once every published slice's tickets are done. Decompose keeps
+        # every published slice non-empty (graph.validate refuses a slice no
+        # ticket references), so each one shows up in by_slice; an empty slice
+        # would make this check never pass.
         if spec_id and ops and all(
                 by_slice.get(sid)
                 and all(after[t].get("status") in DONE for t in by_slice[sid])
@@ -421,8 +437,7 @@ class OrbitTicketStore:
         run_id, names = st["run_id"], self._names(st)
         key = source_key(run_id, "spec")
         ref = f"key:{key}"
-        labels = sorted({run_label(run_id, names), names.get("spec") or "kinetic-spec",
-                         names["hold"]})
+        labels = sorted({run_label(run_id, names), names["spec"], names["hold"]})
         annotation = {"role": "spec", "run": run_id, "phase": "awaiting-approval"}
         text = f"{SPEC_GENERATED}\n\n{body}"
         return [
@@ -460,7 +475,9 @@ class OrbitTicketStore:
             return
         phase = SPEC_PHASES.get(event)
         if phase is None:
-            raise ValueError(f"unknown spec sync event '{event}'")
+            raise OrbitStoreError(
+                "INVALID_ARGUMENT", f"unknown spec sync event '{event}'",
+                "expected one of: " + ", ".join(sorted([*SPEC_PHASES, "done"])))
         self._batch(st, [
             {"op": "update", "id": spec_id, "clear_waiting": True},
             {"op": "annotate", "id": spec_id, "owner": ANNOTATION_OWNER,

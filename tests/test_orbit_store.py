@@ -117,6 +117,36 @@ def task_json(tid, ann, *, status="todo", lease_until=None, task_type="task", la
             "labels": list(labels), "annotations": {"kinetic": ann} if ann is not None else {}}
 
 
+class IsSliceTest(unittest.TestCase):
+    """A slice: role "slice", or (old runs) an epic carrying the run label."""
+
+    LABEL = f"kinetic-run-{RUN}"
+
+    def test_role_slice_is_a_slice(self):
+        self.assertTrue(orbit_store._is_slice(
+            task_json("orb-a", {"role": "slice", "spec": "orb-s"}, labels=[self.LABEL]),
+            self.LABEL))
+
+    def test_old_run_epic_with_the_run_label_is_a_slice(self):
+        self.assertTrue(orbit_store._is_slice(
+            task_json("orb-a", None, task_type="epic", labels=[self.LABEL]), self.LABEL))
+
+    def test_epic_without_the_run_label_is_not_a_slice(self):
+        foreign = task_json("orb-x", None, task_type="epic",
+                            labels=["kinetic-run-ffffffffffff"])
+        self.assertFalse(orbit_store._is_slice(foreign, self.LABEL))
+        unlabeled = task_json("orb-y", None, task_type="epic")
+        self.assertFalse(orbit_store._is_slice(unlabeled, self.LABEL))
+
+    def test_the_spec_epic_is_not_a_slice(self):
+        spec = task_json("orb-s", {"role": "spec"}, task_type="epic", labels=[self.LABEL])
+        self.assertFalse(orbit_store._is_slice(spec, self.LABEL))
+
+    def test_a_plain_task_is_not_a_slice(self):
+        self.assertFalse(orbit_store._is_slice(
+            task_json("orb-t", ticket(repo="api"), labels=[self.LABEL]), self.LABEL))
+
+
 class FakeOrbitTest(unittest.TestCase):
     """Orbit store behavior with `call` patched: no binary needed."""
 
@@ -272,12 +302,27 @@ class FakeOrbitTest(unittest.TestCase):
                 {"op": "annotate", "id": spec_id, "owner": "kinetic",
                  "value": {"role": "spec", "run": RUN, "phase": phase}}], event)
 
-    def test_sync_spec_unknown_event_raises(self):
+    def test_sync_spec_unknown_event_raises_a_store_error(self):
         self._seed_spec_task()
         st = state.load(self.run_dir)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(orbit_store.OrbitStoreError) as caught:
             ticket_store.for_state(st).sync_spec(self.run_dir, st, "bogus")
+        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+        self.assertIn("'bogus'", caught.exception.message)
         self.assertEqual(self.batches, [])
+
+    def test_persisted_names_missing_spec_get_the_adapter_default(self):
+        # A run that resolved names before "spec" existed keeps them in
+        # ticket_store.config; the adapter default backfills the key.
+        f = self.run_dir / ".kinetic" / "state.json"
+        raw = json.loads(f.read_text())
+        raw["ticket_store"]["config"]["names"] = \
+            {k: v for k, v in NAMES.items() if k != "spec"}
+        f.write_text(json.dumps(raw))
+        st = state.load(self.run_dir)
+        ops = ticket_store.for_state(st).spec_ops(self.run_dir, st, "T", "b")
+        self.assertIn("kinetic-spec", ops[0]["labels"])
+        self.assertIn("kinetic-spec", ops[3]["add"])
 
 
 class CallTest(unittest.TestCase):
