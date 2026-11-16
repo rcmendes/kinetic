@@ -432,9 +432,23 @@ def record_gate(run_dir, gate: str, approved: bool, note: str = "") -> None:
             rec["granted_at"] = granted or rec["at"]
         s["gates"][gate] = rec
 
-    _mutate(run_dir, fn)
+    st = _mutate(run_dir, fn)
     if gate == "breakdown" and approved:
         publish_tickets(run_dir)
+    _sync_spec(run_dir, st, gate, approved)
+
+
+def _sync_spec(run_dir, st: dict, gate: str, approved: bool) -> None:
+    """Mirror a spec lifecycle event on the run's ticket store. Runs after the
+    gate is recorded, so a store failure — raised unchanged as TicketStoreError,
+    like publish_tickets — never loses an approval."""
+    if ticket_store.is_local(st):
+        return
+    store = ticket_store.for_state(st)
+    if gate == "spec":
+        store.sync_spec(run_dir, st, "gate-approved" if approved else "gate-rejected")
+    elif gate == "breakdown" and approved:
+        store.sync_spec(run_dir, st, "building")
 
 
 def publish_tickets(run_dir) -> dict:

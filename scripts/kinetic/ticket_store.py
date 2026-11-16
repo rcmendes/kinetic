@@ -36,8 +36,8 @@ class TicketStore(Protocol):
         """Publish the run's spec; returns {"ref": <spec reference>, "published": bool}."""
 
     def sync_spec(self, run_dir, st: dict, event: str) -> None:
-        """Mirror a spec lifecycle event on the store:
-        "gate-approved", "gate-rejected" or "done"."""
+        """Mirror a spec lifecycle event on the store: "gate-approved",
+        "gate-rejected", "building" (breakdown approved) or "done"."""
 
     def touch(self, run_dir, st: dict, ticket_id: str) -> None:
         """Signal that a running ticket's implementer is alive."""

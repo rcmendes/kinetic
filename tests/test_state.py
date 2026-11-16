@@ -344,6 +344,90 @@ class PublishSpecTest(unittest.TestCase):
         self.assertIsNone(state.load(self.run_dir)["spec"])
 
 
+class SpecGateSyncTest(unittest.TestCase):
+    """record_gate mirrors the spec lifecycle on the run's ticket store."""
+
+    class SpyStore:
+        def __init__(self):
+            self.events = []
+            self.published = 0
+
+        def read(self, run_dir, st):
+            return {}
+
+        def write(self, run_dir, st, before, after):
+            pass
+
+        def publish(self, run_dir, st):
+            self.published += 1
+            return {}
+
+        def sync_spec(self, run_dir, st, event):
+            self.events.append(event)
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.run_dir = Path(self._tmp.name) / "run"
+        self.store = self.SpyStore()
+        patcher = mock.patch.object(ticket_store, "for_state", return_value=self.store)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _init(self, record=None):
+        state.init(self.run_dir, "feature", "F-1",
+                   ticket_store_record=record or {"kind": "spy", "config": {}})
+
+    def test_spec_gate_approved_syncs_gate_approved(self):
+        self._init()
+        state.record_gate(self.run_dir, "spec", True)
+        self.assertEqual(self.store.events, ["gate-approved"])
+        self.assertTrue(state.load(self.run_dir)["gates"]["spec"]["approved"])
+
+    def test_spec_gate_rejected_syncs_gate_rejected(self):
+        self._init()
+        state.record_gate(self.run_dir, "spec", False, "revise")
+        self.assertEqual(self.store.events, ["gate-rejected"])
+        self.assertFalse(state.load(self.run_dir)["gates"]["spec"]["approved"])
+
+    def test_breakdown_approval_syncs_building(self):
+        self._init()
+        state.record_gate(self.run_dir, "breakdown", True)
+        self.assertEqual(self.store.published, 1)
+        self.assertEqual(self.store.events, ["building"])
+
+    def test_breakdown_rejection_and_other_gates_do_not_sync(self):
+        self._init()
+        state.record_gate(self.run_dir, "breakdown", False)
+        state.record_gate(self.run_dir, "review", True)
+        state.record_gate(self.run_dir, "ship", True)
+        self.assertEqual(self.store.events, [])
+        self.assertEqual(self.store.published, 0)
+
+    def test_store_failure_raises_after_the_gate_is_recorded(self):
+        class FailingStore(self.SpyStore):
+            def sync_spec(self, run_dir, st, event):
+                raise ticket_store.TicketStoreError("orbit BOARD_NOT_FOUND: gone")
+
+        self._init()
+        patcher = mock.patch.object(ticket_store, "for_state",
+                                    return_value=FailingStore())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        with self.assertRaises(ticket_store.TicketStoreError):
+            state.record_gate(self.run_dir, "spec", True)
+        self.assertTrue(state.load(self.run_dir)["gates"]["spec"]["approved"])
+
+    def test_local_run_calls_none_of_this(self):
+        self._init({"kind": "local"})
+        with mock.patch.object(ticket_store.LocalTicketStore, "sync_spec") as sync:
+            state.record_gate(self.run_dir, "spec", True)
+            state.record_gate(self.run_dir, "spec", False)
+            state.record_gate(self.run_dir, "breakdown", True)
+        sync.assert_not_called()
+        self.assertEqual(self.store.events, [])
+
+
 class CliTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

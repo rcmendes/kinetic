@@ -239,6 +239,46 @@ class FakeOrbitTest(unittest.TestCase):
         self.assertEqual(tickets["orb-a.b"]["liveness"], "stuck")
         self.assertEqual(tickets["orb-a.c"]["liveness"], "alive")
 
+    def _seed_spec_task(self, spec_id="orb-spec.1"):
+        f = self.run_dir / ".kinetic" / "state.json"
+        raw = json.loads(f.read_text())
+        raw["ticket_store"]["config"]["spec_task"] = spec_id
+        f.write_text(json.dumps(raw))
+        return spec_id
+
+    def test_sync_spec_without_a_spec_task_sends_no_batch(self):
+        st = state.load(self.run_dir)
+        store = ticket_store.for_state(st)
+        for event in ("gate-approved", "gate-rejected", "building", "done"):
+            self.assertIsNone(store.sync_spec(self.run_dir, st, event), event)
+        self.assertEqual(self.batches, [])
+
+    def test_sync_spec_done_is_a_no_op(self):
+        self._seed_spec_task()
+        st = state.load(self.run_dir)
+        ticket_store.for_state(st).sync_spec(self.run_dir, st, "done")
+        self.assertEqual(self.batches, [])
+
+    def test_sync_spec_clears_waiting_and_sets_the_phase(self):
+        spec_id = self._seed_spec_task()
+        st = state.load(self.run_dir)
+        store = ticket_store.for_state(st)
+        for event, phase in (("gate-approved", "approved"),
+                             ("gate-rejected", "revising"),
+                             ("building", "building")):
+            store.sync_spec(self.run_dir, st, event)
+            self.assertEqual(self.batches[-1], [
+                {"op": "update", "id": spec_id, "clear_waiting": True},
+                {"op": "annotate", "id": spec_id, "owner": "kinetic",
+                 "value": {"role": "spec", "run": RUN, "phase": phase}}], event)
+
+    def test_sync_spec_unknown_event_raises(self):
+        self._seed_spec_task()
+        st = state.load(self.run_dir)
+        with self.assertRaises(ValueError):
+            ticket_store.for_state(st).sync_spec(self.run_dir, st, "bogus")
+        self.assertEqual(self.batches, [])
+
 
 class CallTest(unittest.TestCase):
     def run_result(self, envelope, code=0):
@@ -621,6 +661,72 @@ class OrbitSpecPublishTest(unittest.TestCase):
         self.assertEqual([t["id"] for t in epics["tasks"]], [task_id])
         ready = orbit_json(self.board, "ready")
         self.assertNotIn(task_id, [t["id"] for t in ready["tasks"]])
+
+
+@unittest.skipUnless(orbit_available(), SKIP_REASON)
+class OrbitSpecSyncTest(unittest.TestCase):
+    """record_gate mirrors the spec lifecycle on the run's spec Task."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.run_dir, self.board = make_orbit_run(Path(self._tmp.name))
+        deep_board(self.board)
+        (self.run_dir / "spec.md").write_text("# Spec\n\nBuild the exporter.\n")
+        self.spec_id = state.publish_spec(self.run_dir, "Export CSV")["ref"]
+
+    def shown(self) -> dict:
+        return orbit_json(self.board, "show", self.spec_id)
+
+    def phase(self) -> str:
+        return self.shown()["annotations"]["kinetic"]["phase"]
+
+    def test_spec_gate_approved_clears_waiting_and_marks_approved(self):
+        state.record_gate(self.run_dir, "spec", True)
+        shown = self.shown()
+        self.assertIsNone(shown["waiting_on"])
+        self.assertEqual(shown["status"], "todo")
+        self.assertEqual(self.phase(), "approved")
+        self.assertIn("kinetic", shown["labels"])  # the hold label stays
+
+    def test_spec_gate_rejected_marks_revising(self):
+        state.record_gate(self.run_dir, "spec", False, "revise")
+        shown = self.shown()
+        self.assertIsNone(shown["waiting_on"])
+        self.assertEqual(self.phase(), "revising")
+
+    def test_republishing_after_rejection_reopens_the_gate(self):
+        state.record_gate(self.run_dir, "spec", False)
+        (self.run_dir / "spec.md").write_text("# Spec\n\nBuild the revised exporter.\n")
+        state.publish_spec(self.run_dir, "Export CSV")
+        shown = self.shown()
+        self.assertEqual(shown["waiting_on"], "kinetic: spec approval")
+        self.assertEqual(self.phase(), "awaiting-approval")
+
+    def test_breakdown_approval_marks_building(self):
+        state.record_gate(self.run_dir, "spec", True)
+        stage_two(self.run_dir)
+        state.record_gate(self.run_dir, "breakdown", True)
+        shown = self.shown()
+        self.assertIsNone(shown["waiting_on"])
+        self.assertEqual(self.phase(), "building")
+
+    def test_the_last_ticket_closes_the_spec_task(self):
+        stage_two(self.run_dir)
+        state.record_gate(self.run_dir, "breakdown", True)
+        for tid in state.load(self.run_dir)["tickets"]:
+            state.set_ticket(self.run_dir, tid, status="running")
+            state.set_ticket(self.run_dir, tid, status="done")
+        self.assertEqual(self.shown()["status"], "done")
+
+    def test_a_board_outage_does_not_lose_the_gate(self):
+        with mock.patch.object(orbit_store.OrbitTicketStore, "sync_spec",
+                               side_effect=ticket_store.TicketStoreError(
+                                   "orbit BOARD_NOT_FOUND: gone")):
+            with self.assertRaises(ticket_store.TicketStoreError):
+                state.record_gate(self.run_dir, "spec", True)
+        self.assertTrue(state.load(self.run_dir)["gates"]["spec"]["approved"])
+        self.assertEqual(self.shown()["waiting_on"], "kinetic: spec approval")
 
 
 if __name__ == "__main__":
