@@ -49,8 +49,12 @@ The per-tracker instructions (GitHub, Jira, Linear, local, Orbit, other) that te
 _Avoid_: Adapter (unqualified), integration
 
 **Ticket store**:
-Where a run's tickets live, behind one interface that `state.py` reads and writes through: the local ticket store (`state.json`) for most trackers, or the Orbit ticket store (Tasks on an Orbit Board) for the `orbit` tracker.
+Where a run's tickets and its spec live, behind one interface that `state.py` reads and writes through: the local ticket store (`state.json` for tickets, `spec.md` for the spec) for most trackers, or the Orbit ticket store (Tasks on an Orbit Board) for the `orbit` tracker.
 _Avoid_: Adapter, backend, board
+
+**Spec Task**:
+The Task the Orbit ticket store publishes a run's spec as: a top-level Task of type `epic` that the run's slices nest under, so `orbit list --type epic` is the one place for every spec and `orbit tree` shows spec, slices and tickets. Its `kinetic` Annotation (`{"role": "spec", "run": ..., "phase": ...}`) mirrors the spec gate.
+_Avoid_: Epic (unqualified), spec issue
 
 ## Repos
 

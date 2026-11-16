@@ -75,7 +75,7 @@ Iterate until the user approves.
 
 Publish in dependency order (blockers first) so edges can reference real identifiers. Do NOT close or modify the source spec issue.
 
-When the tracker adapter says it publishes staged tickets, follow the Local steps; kinetic publishes them when the breakdown gate is approved.
+When the tracker adapter says it publishes staged tickets, follow the Local steps; kinetic publishes them when the breakdown gate is approved. When the ticket store holds a published spec, the slices it publishes are children of the spec, and `kinetic trace` walks the result.
 
 - **Tracker with remote issues**: follow the adapter: "create slice parent" per slice, "create child" per ticket under it, "set kind" for human tickets, "assign to user" for human tickets, "link blocker" with the edge type for each blocker, and "link after" / "link ships-with" / "link related" where they apply. Use the ticket reference the adapter gives as the ticket id.
 - **Local**: write one file per child ticket at `<run_dir>/issues/NN-<repo>-<slug>.md`, numbered from `01` in dependency order. Use `NN-<repo>-<slug>` as the ticket id (a human ticket with no repo: `NN-<slug>`). One ticket per file, never a combined file. The first lines of the file are a header that `kinetic.board` owns (see step 5): write the template, then let `board header` fill it.
@@ -104,7 +104,7 @@ First record the approved slice ids, before any child ticket, so `graph validate
 kinetic state set-slices --run <dir> --slices '["<slice-id>","<slice-id>"]'
 ```
 
-`set-slices` does not touch the spec: `specify` already recorded it with `set-spec`. The spec, slices and tickets are walked with `kinetic trace --run <dir>` (add `--id <spec|slice|ticket>` for one branch).
+`set-slices` does not touch the spec: `specify` already recorded it when it published. The spec, slices and tickets are walked with `kinetic trace --run <dir>` (add `--id <spec|slice|ticket>` for one branch).
 
 Then, for every child ticket (`blocked_by` is a JSON list of `{"id","type"}`; use `[]` when none):
 

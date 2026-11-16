@@ -10,7 +10,7 @@ A rejected gate: record `--approved false` with the reason as `--note`, `set-pha
 
 ## Spec gate (after the specify phase)
 
-Show the spec location (the tracker reference or `<run_dir>/spec.md`) and a three-line summary. The spec must already pass `kinetic spec_lint <file>` (exit 0). Ask: "Approve this spec?" Options: approve, revise.
+Show the spec location (the tracker reference or `<run_dir>/spec.md`) and a three-line summary. The spec must already pass `kinetic spec_lint <file>` (exit 0). Ask: "Approve this spec?" Options: approve, revise. On approval or rejection the ticket store updates the spec it published: its waiting state clears and its phase follows the answer. A spec kept only in the run folder needs nothing.
 
 ## Breakdown gate (after tickets; records the grant)
 
