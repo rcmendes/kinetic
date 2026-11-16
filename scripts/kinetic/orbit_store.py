@@ -437,6 +437,14 @@ class OrbitTicketStore:
 
     def publish_spec(self, run_dir, st: dict, title: str, body: str) -> dict:
         """Publish the spec as the run's epic spec Task; republishing rewrites it."""
+        anchor = Path(self._anchor(st))
+        depth = _max_depth(anchor)
+        if depth is not None and depth < 2:
+            raise OrbitStoreError("INVALID_ARGUMENT",
+                                  "the Board nests SubTasks one level deep, but "
+                                  "the spec Task holds slices and their tickets "
+                                  f"(board.max_subtask_depth is {depth})",
+                                  DEPTH_FIX)
         keys = self._batch(st, self.spec_ops(run_dir, st, title, body)).get("keys", {})
         ref = keys[source_key(st["run_id"], "spec")]
         self.config["spec_task"] = ref
