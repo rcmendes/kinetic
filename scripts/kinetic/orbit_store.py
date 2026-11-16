@@ -200,6 +200,16 @@ def to_ticket(task: dict) -> dict:
     return t
 
 
+def _role(task: dict):
+    """The kinetic role Annotation: "spec", "slice" or None (a ticket)."""
+    return ((task.get("annotations") or {}).get(ANNOTATION_OWNER) or {}).get("role")
+
+
+def _is_slice(task: dict) -> bool:
+    """A slice Task: role "slice" (spec-Task runs) or, for old runs, an epic."""
+    return _role(task) == "slice" or (task.get("type") == "epic" and _role(task) != "spec")
+
+
 class OrbitTicketStore:
     def __init__(self, config: dict):
         self.config = config
@@ -270,7 +280,8 @@ class OrbitTicketStore:
         tasks = data.get("tasks", [])
         prefix = source_key(run_id, "")
         ids = {task["source_key"][len(prefix):]: task["id"] for task in tasks
-               if (task.get("source_key") or "").startswith(prefix)}
+               if (task.get("source_key") or "").startswith(prefix)
+               and _role(task) != "spec"}
         # Provisional ids keep resolving after publish, and run-level records are
         # rebuilt from the Board, so a save lost right after a publish heals here.
         st["ticket_aliases"] = ids
@@ -278,11 +289,11 @@ class OrbitTicketStore:
             self.config["published"] = True
             self.config["published_slices"] = sorted(
                 task["id"] for task in tasks
-                if task.get("type") == "epic" and task["id"] in ids.values())
+                if _is_slice(task) and task["id"] in ids.values())
             st["slices"] = [ids.get(s, s) for s in st.get("slices", [])]
         tickets, fixes = {}, []
         for task in tasks:
-            if task.get("type") == "epic":
+            if _is_slice(task) or _role(task) == "spec":
                 continue
             t = _rewrite(to_ticket(task), ids)
             if not t:
@@ -341,11 +352,22 @@ class OrbitTicketStore:
         from kinetic import graph
         run_id, names = st["run_id"], self._names(st)
         ref = self._ref(run_id, set(tickets) | set(new_slices), aliases)
-        ops = [{"op": "add", "key": source_key(run_id, s), "title": ticket_text(run_dir, s)[0],
-                "type": "epic", "labels": [run_label(run_id, names)],
+        spec_id = self.config.get("spec_task")
+        ops = []
+        for s in new_slices:
+            add = {"op": "add", "key": source_key(run_id, s),
+                   "title": ticket_text(run_dir, s)[0],
+                   "labels": [run_label(run_id, names)]}
+            if spec_id:
+                # New shape: a plain Task nested under the run's spec Task.
+                add["parent"] = spec_id
+                add["annotations"] = {ANNOTATION_OWNER: {"role": "slice", "spec": spec_id}}
+            else:
+                add["type"] = "epic"
                 # optional: Boards and runs without a recorded spec never see this Annotation
-                **({"annotations": {ANNOTATION_OWNER: {"spec": st["spec"]}}} if st.get("spec") else {})}
-               for s in new_slices]
+                if st.get("spec"):
+                    add["annotations"] = {ANNOTATION_OWNER: {"spec": st["spec"]}}
+            ops.append(add)
         try:
             order = graph.topo_order(tickets)
         except ValueError:
@@ -367,7 +389,8 @@ class OrbitTicketStore:
         return ops, order
 
     def _close_slices(self, st: dict, staged: dict, before: dict, after: dict) -> list:
-        """Close a slice's Parent Task in the Batch that finishes its last SubTask."""
+        """Close a slice's Task in the Batch that finishes its last SubTask, and
+        the spec Task in the Batch that finishes the last slice."""
         published = set(self.config.get("published_slices", []))
         by_slice: dict = {}
         for tid, t in after.items():
@@ -379,6 +402,14 @@ class OrbitTicketStore:
             just = any((before.get(t) or {}).get("status") not in DONE for t in tids)
             if finished and just:
                 ops.append({"op": "done", "id": slice_id, "by": holder(st["run_id"])})
+        spec_id = self.config.get("spec_task")
+        # Orbit refuses `done` on a Task with open SubTasks, so the spec closes
+        # only once every published slice's tickets are done.
+        if spec_id and ops and all(
+                by_slice.get(sid)
+                and all(after[t].get("status") in DONE for t in by_slice[sid])
+                for sid in published):
+            ops.append({"op": "done", "id": spec_id, "by": holder(st["run_id"])})
         return ops
 
     def spec_ops(self, run_dir, st: dict, title: str, body: str) -> list:
@@ -409,7 +440,10 @@ class OrbitTicketStore:
         return {"ref": ref, "published": True}
 
     def sync_spec(self, run_dir, st: dict, event: str) -> None:
-        return None  # spec lifecycle mirroring lands with the record_gate hooks
+        # "done" needs nothing here: _close_slices already closes the spec Task in
+        # the Batch that finishes the last slice. Gate events land with the
+        # record_gate hooks.
+        return None
 
     def publish(self, run_dir, st: dict) -> dict:
         """Send every staged ticket (and new slices) in one Batch; returns provisional -> Task ID."""
