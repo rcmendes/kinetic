@@ -12,6 +12,9 @@ After the breakdown gate, a ticket kinetic adds later (a `NEEDS_HUMAN` ticket, a
 
 ## Operations
 
+### create spec
+`kinetic state publish-spec` (after spec lint) creates the run's spec Task: a top-level Task of type `epic` with Source Key `kinetic:<run id>:spec`, the labels `names.run`, `names.spec` and the hold label `names.hold`, the `kinetic` Annotation `{"role": "spec", "run": "<run id>", "phase": "awaiting-approval"}` and `waiting_on` "kinetic: spec approval" while the spec gate is open. Its body is a copy of `spec.md` whose first line says it is generated: edit the file and publish again; the same Source Key makes republishing rewrite the Task instead of adding another.
+
 ### create slice parent
 Done by publishing: each slice becomes a Parent Task with type `epic`. When the run recorded a spec (`kinetic state set-spec`), the slice also carries it in its `kinetic` Annotation (`{"spec": "<ref>"}`), so `orbit show <slice>` names the spec; with no spec recorded the Annotation is not written. Orbit itself has no spec concept: nothing changes for Boards that kinetic does not use.
 
@@ -59,6 +62,7 @@ The Orbit Task ID, for example `orb-a7b2c9.d4b3df`.
   "related": "",
   "status": {"todo": "todo", "running": "in_progress", "done": "done", "merged": "done", "blocked": "in_progress"},
   "hold": "kinetic",
-  "run": "kinetic-run-<run id>"
+  "run": "kinetic-run-<run id>",
+  "spec": "kinetic-spec"
 }
 ```
