@@ -519,6 +519,63 @@ class OrbitPublishTest(unittest.TestCase):
 
 
 @unittest.skipUnless(orbit_available(), SKIP_REASON)
+class OrbitSpecTreeTest(unittest.TestCase):
+    """New-shape run on a depth-2 Board: spec epic > slice Tasks > ticket Tasks."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.run_dir, self.board = make_orbit_run(Path(self._tmp.name))
+        deep_board(self.board)
+        (self.run_dir / "spec.md").write_text("# Spec\n\nBuild the exporter.\n")
+        self.spec_id = state.publish_spec(self.run_dir, "Export CSV")["ref"]
+        stage_two(self.run_dir)
+        self.mapping = state.publish_tickets(self.run_dir)
+        self.a = self.mapping["01-api-a"]
+        self.b = self.mapping["02-web-b"]
+        self.core = self.mapping["01-core"]
+
+    def test_slice_is_a_plain_task_parented_under_the_spec(self):
+        shown = orbit_json(self.board, "show", self.core)
+        self.assertNotEqual(shown["type"], "epic")
+        self.assertEqual(shown["parent"], self.spec_id)
+        self.assertEqual(shown["annotations"]["kinetic"],
+                         {"role": "slice", "spec": self.spec_id})
+
+    def test_tree_shows_spec_slice_tickets(self):
+        self.assertEqual(orbit_json(self.board, "show", self.a)["parent"], self.core)
+        self.assertEqual(orbit_json(self.board, "show", self.b)["parent"], self.core)
+        tree = orbit_json(self.board, "tree", self.spec_id)["tasks"]
+        self.assertEqual({t["id"]: t["depth"] for t in tree},
+                         {self.spec_id: 0, self.core: 1, self.a: 2, self.b: 2})
+
+    def test_read_rebuilds_tickets_skipping_spec_and_slice(self):
+        tickets = state.load(self.run_dir)["tickets"]
+        self.assertEqual(set(tickets), {self.a, self.b})
+        self.assertEqual(tickets[self.a]["slice"], self.core)
+
+    def test_last_ticket_closes_the_slice_then_the_spec(self):
+        state.set_ticket(self.run_dir, self.a, status="running")
+        state.set_ticket(self.run_dir, self.a, status="done")
+        self.assertEqual(orbit_json(self.board, "show", self.core)["status"], "todo")
+        self.assertEqual(orbit_json(self.board, "show", self.spec_id)["status"], "todo")
+        state.set_ticket(self.run_dir, self.b, status="running")
+        state.set_ticket(self.run_dir, self.b, status="done")
+        self.assertEqual(orbit_json(self.board, "show", self.core)["status"], "done")
+        self.assertEqual(orbit_json(self.board, "show", self.spec_id)["status"], "done")
+
+    def test_reopening_a_done_ticket_reopens_slice_and_spec(self):
+        for tid in (self.a, self.b):
+            state.set_ticket(self.run_dir, tid, status="running")
+            state.set_ticket(self.run_dir, tid, status="done")
+        self.assertEqual(orbit_json(self.board, "show", self.spec_id)["status"], "done")
+        state.set_ticket(self.run_dir, self.b, status="running")
+        self.assertEqual(orbit_json(self.board, "show", self.b)["status"], "in_progress")
+        self.assertNotEqual(orbit_json(self.board, "show", self.core)["status"], "done")
+        self.assertNotEqual(orbit_json(self.board, "show", self.spec_id)["status"], "done")
+
+
+@unittest.skipUnless(orbit_available(), SKIP_REASON)
 class OrbitSpecPublishTest(unittest.TestCase):
     """The run's spec is one epic Task on the Board, rewritten by republishing."""
 
