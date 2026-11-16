@@ -94,6 +94,18 @@ class LocalStoreTest(unittest.TestCase):
         self.assertIsNone(store.touch(self.run_dir, st, "01-api-a"))
         self.assertEqual(store.health(Path("settings.json")), [])
 
+    def test_publish_spec_records_spec_md_and_reports_not_published(self):
+        st = state.init(self.run_dir, "feature", "ABC-1")
+        store = ticket_store.for_state(st)
+        result = store.publish_spec(self.run_dir, st, "Export CSV", "# Export CSV\n\nbody")
+        self.assertEqual(result, {"ref": "spec.md", "published": False})
+
+    def test_sync_spec_is_a_no_op(self):
+        st = state.init(self.run_dir, "feature", "ABC-1")
+        store = ticket_store.for_state(st)
+        for event in ("gate-approved", "gate-rejected", "done"):
+            self.assertIsNone(store.sync_spec(self.run_dir, st, event), event)
+
 
 if __name__ == "__main__":
     unittest.main()
