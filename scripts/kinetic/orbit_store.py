@@ -27,6 +27,9 @@ DONE = ("done", "done_with_concerns", "merged", "released")
 PAUSED = ("needs_decision", "blocked")
 SPEC_WAITING = "kinetic: spec approval"  # set while the spec gate is open
 SPEC_GENERATED = "generated from spec.md; edit the file, then publish-spec again"
+# The spec Task's `phase` Annotation for each sync_spec event.
+SPEC_PHASES = {"gate-approved": "approved", "gate-rejected": "revising",
+               "building": "building"}
 # Keys read() adds that are not ticket fields and are never written back.
 DERIVED = ("liveness",)
 
@@ -440,10 +443,21 @@ class OrbitTicketStore:
         return {"ref": ref, "published": True}
 
     def sync_spec(self, run_dir, st: dict, event: str) -> None:
-        # "done" needs nothing here: _close_slices already closes the spec Task in
-        # the Batch that finishes the last slice. Gate events land with the
-        # record_gate hooks.
-        return None
+        """Mirror a spec lifecycle event on the spec Task: the gate closing clears
+        `waiting_on` and the `phase` Annotation tracks the run. "done" needs
+        nothing here: _close_slices already closes the spec Task in the Batch
+        that finishes the last slice."""
+        spec_id = self.config.get("spec_task")
+        if not spec_id or event == "done":
+            return
+        phase = SPEC_PHASES.get(event)
+        if phase is None:
+            raise ValueError(f"unknown spec sync event '{event}'")
+        self._batch(st, [
+            {"op": "update", "id": spec_id, "clear_waiting": True},
+            {"op": "annotate", "id": spec_id, "owner": ANNOTATION_OWNER,
+             "value": {"role": "spec", "run": st["run_id"], "phase": phase}},
+        ])
 
     def publish(self, run_dir, st: dict) -> dict:
         """Send every staged ticket (and new slices) in one Batch; returns provisional -> Task ID."""
