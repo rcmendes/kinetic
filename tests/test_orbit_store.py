@@ -279,14 +279,8 @@ class FakeOrbitTest(unittest.TestCase):
     def test_sync_spec_without_a_spec_task_sends_no_batch(self):
         st = state.load(self.run_dir)
         store = ticket_store.for_state(st)
-        for event in ("gate-approved", "gate-rejected", "building", "done"):
+        for event in ("gate-approved", "gate-rejected", "building"):
             self.assertIsNone(store.sync_spec(self.run_dir, st, event), event)
-        self.assertEqual(self.batches, [])
-
-    def test_sync_spec_done_is_a_no_op(self):
-        self._seed_spec_task()
-        st = state.load(self.run_dir)
-        ticket_store.for_state(st).sync_spec(self.run_dir, st, "done")
         self.assertEqual(self.batches, [])
 
     def test_sync_spec_clears_waiting_and_sets_the_phase(self):
@@ -661,6 +655,57 @@ class OrbitSpecTreeTest(unittest.TestCase):
 
 
 @unittest.skipUnless(orbit_available(), SKIP_REASON)
+class OrbitSpecHealingTest(unittest.TestCase):
+    """The spec Task is rebuilt from the Board when the saved store config loses it."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.run_dir, self.board = make_orbit_run(Path(self._tmp.name))
+        deep_board(self.board)
+        (self.run_dir / "spec.md").write_text("# Spec\n\nBuild the exporter.\n")
+        self.spec_id = state.publish_spec(self.run_dir, "Export CSV")["ref"]
+        stage_two(self.run_dir)
+
+    def _lose_spec_task(self):
+        f = self.run_dir / ".kinetic" / "state.json"
+        raw = json.loads(f.read_text())
+        raw["ticket_store"]["config"].pop("spec_task")
+        f.write_text(json.dumps(raw))
+
+    def _finish(self, *ids):
+        for tid in ids:
+            state.set_ticket(self.run_dir, tid, status="running")
+            state.set_ticket(self.run_dir, tid, status="done")
+
+    def test_publish_tickets_after_losing_spec_task_still_nests_slices(self):
+        self._lose_spec_task()
+        mapping = state.publish_tickets(self.run_dir)
+        shown = orbit_json(self.board, "show", mapping["01-core"])
+        self.assertEqual(shown["parent"], self.spec_id)
+        self.assertNotEqual(shown["type"], "epic")
+
+    def test_closing_the_last_slice_after_losing_spec_task_closes_the_spec(self):
+        mapping = state.publish_tickets(self.run_dir)
+        self._lose_spec_task()
+        self._finish(mapping["01-api-a"], mapping["02-web-b"])
+        self.assertEqual(orbit_json(self.board, "show", self.spec_id)["status"], "done")
+
+    def test_read_closes_a_spec_whose_slices_all_closed_earlier(self):
+        mapping = state.publish_tickets(self.run_dir)
+        self._finish(mapping["01-api-a"], mapping["02-web-b"])
+        orbit_json(self.board, "reopen", self.spec_id)  # the close was missed
+        self.assertEqual(orbit_json(self.board, "show", self.spec_id)["status"], "todo")
+        state.load(self.run_dir)
+        self.assertEqual(orbit_json(self.board, "show", self.spec_id)["status"], "done")
+
+    def test_read_leaves_the_spec_open_while_a_slice_is_open(self):
+        mapping = state.publish_tickets(self.run_dir)
+        self._finish(mapping["01-api-a"])
+        state.load(self.run_dir)
+        self.assertEqual(orbit_json(self.board, "show", self.spec_id)["status"], "todo")
+
+
 class OrbitSpecPublishTest(unittest.TestCase):
     """The run's spec is one epic Task on the Board, rewritten by republishing."""
 

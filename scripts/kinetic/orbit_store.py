@@ -246,6 +246,19 @@ class OrbitTicketStore:
         self.config["names"] = names
         return names
 
+    def _spec_id(self, st: dict):
+        """The run's spec Task ID: from the saved config, else rebuilt from the Board
+        (a save lost after `publish_spec` heals here, the way slices heal on read)."""
+        if self.config.get("spec_task"):
+            return self.config["spec_task"]
+        data = call(self._anchor(st), ["list", "--include-closed", "--all", "--label",
+                                       run_label(st["run_id"], self._names(st))])
+        for task in data.get("tasks", []):
+            if _role(task) == "spec":
+                self.config["spec_task"] = task["id"]
+                return task["id"]
+        return None
+
     def _anchor(self, st: dict) -> str:
         if not self.config.get("anchor"):
             from kinetic import tracker
@@ -323,6 +336,14 @@ class OrbitTicketStore:
                     t.update(status="needs_decision", human_note="marked done outside kinetic")
                 fixes += ops_for(task["id"], actual, t, run_id, names)
             tickets[task["id"]] = t
+        spec = next((t for t in tasks if _role(t) == "spec"), None)
+        if spec:
+            self.config["spec_task"] = spec["id"]
+            slices = [t for t in tasks if _is_slice(t, label) and t["id"] in ids.values()]
+            if (slices and spec.get("status") == "todo"
+                    and all(t.get("status") == "done" for t in slices)):
+                # Every slice is done but the spec Task is not: a missed close heals here.
+                fixes.append({"op": "done", "id": spec["id"], "by": holder(run_id)})
         if fixes:
             self._batch(st, fixes)
         return tickets
@@ -368,7 +389,7 @@ class OrbitTicketStore:
         from kinetic import graph
         run_id, names = st["run_id"], self._names(st)
         ref = self._ref(run_id, set(tickets) | set(new_slices), aliases)
-        spec_id = self.config.get("spec_task")
+        spec_id = self._spec_id(st) if new_slices else None
         ops = []
         for s in new_slices:
             add = {"op": "add", "key": source_key(run_id, s),
@@ -418,17 +439,18 @@ class OrbitTicketStore:
             just = any((before.get(t) or {}).get("status") not in DONE for t in tids)
             if finished and just:
                 ops.append({"op": "done", "id": slice_id, "by": holder(st["run_id"])})
-        spec_id = self.config.get("spec_task")
         # Orbit refuses `done` on a Task with open SubTasks, so the spec closes
         # only once every published slice's tickets are done. Decompose keeps
         # every published slice non-empty (graph.validate refuses a slice no
         # ticket references), so each one shows up in by_slice; an empty slice
         # would make this check never pass.
-        if spec_id and ops and all(
+        if ops and all(
                 by_slice.get(sid)
                 and all(after[t].get("status") in DONE for t in by_slice[sid])
                 for sid in published):
-            ops.append({"op": "done", "id": spec_id, "by": holder(st["run_id"])})
+            spec_id = self._spec_id(st)
+            if spec_id:
+                ops.append({"op": "done", "id": spec_id, "by": holder(st["run_id"])})
         return ops
 
     def spec_ops(self, run_dir, st: dict, title: str, body: str) -> list:
@@ -467,17 +489,16 @@ class OrbitTicketStore:
 
     def sync_spec(self, run_dir, st: dict, event: str) -> None:
         """Mirror a spec lifecycle event on the spec Task: the gate closing clears
-        `waiting_on` and the `phase` Annotation tracks the run. "done" needs
-        nothing here: _close_slices already closes the spec Task in the Batch
-        that finishes the last slice."""
-        spec_id = self.config.get("spec_task")
-        if not spec_id or event == "done":
+        `waiting_on` and the `phase` Annotation tracks the run. The spec Task is
+        closed by _close_slices, in the Batch that finishes the last slice."""
+        spec_id = self._spec_id(st)
+        if not spec_id:
             return
         phase = SPEC_PHASES.get(event)
         if phase is None:
             raise OrbitStoreError(
                 "INVALID_ARGUMENT", f"unknown spec sync event '{event}'",
-                "expected one of: " + ", ".join(sorted([*SPEC_PHASES, "done"])))
+                "expected one of: " + ", ".join(sorted(SPEC_PHASES)))
         self._batch(st, [
             {"op": "update", "id": spec_id, "clear_waiting": True},
             {"op": "annotate", "id": spec_id, "owner": ANNOTATION_OWNER,
