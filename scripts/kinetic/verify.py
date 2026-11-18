@@ -41,7 +41,7 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
     try:
         res = run(Path(a.run), a.ticket, a.repo_name, Path(a.repo_path), project.config_path(a.run), a.scope)
-    except (config.ConfigError, OSError, project.NoProject) as e:
+    except (ValueError, config.ConfigError, OSError, project.NoProject) as e:
         print(str(e), file=sys.stderr)
         return 2
     print(json.dumps(res))

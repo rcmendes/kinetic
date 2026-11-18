@@ -539,6 +539,17 @@ class CliTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("spec.md", r.stderr)
 
+    def test_touches_cli_accepts_path_lists_and_rejects_invalid_values(self):
+        self.cli("init", "--lane", "epic", "--ref", "E")
+        r = self.cli("set-ticket", "--id", "T1", "--field", 'touches=["src/auth.py"]')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(state.load(self.run_dir)["tickets"]["T1"]["touches"], ["src/auth.py"])
+        for value in ('"src/auth.py"', '[3]', '[""]', '["  "]', 'null'):
+            r = self.cli("set-ticket", "--id", "T1", "--field", "touches=" + value)
+            self.assertNotEqual(r.returncode, 0, value)
+            self.assertIn("touches", r.stderr)
+        self.assertEqual(state.load(self.run_dir)["tickets"]["T1"]["touches"], ["src/auth.py"])
+
     def test_bad_edge_type_and_missing_equals_fail(self):
         self.cli("init", "--lane", "epic", "--ref", "E")
         r = self.cli("set-ticket", "--id", "T1", "--field", 'blocked_by=[{"id":"T0","type":"x"}]')

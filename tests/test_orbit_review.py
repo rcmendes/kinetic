@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import fcntl
 import os
 import shutil
 import subprocess
@@ -126,3 +127,77 @@ class OrbitReviewTest(unittest.TestCase):
         raw = state.load(self.run)
         self.assertIn(self.tid, raw["verify"])
         self.assertEqual(raw["tickets"][self.tid]["status"], "in_review")
+
+    def test_verify_store_failure_preserves_record_and_retries_without_lock(self):
+        self.orbit("property", "set", self.tid, "kinetic", "--value", json.dumps({"repo": "api", "kind": "agent"}))
+        raw = state.init(self.run, "quick", "request")
+        raw["run_id"] = "review-run"
+        raw["ticket_store"] = {"kind": "orbit", "config": {
+            "anchor": str(self.anchor), "published": True,
+            "names": adapter_defaults(ROOT / "trackers" / "orbit.md")}}
+        state.save(self.run, raw)
+        original = subprocess.run
+        fail = True
+        attempts = []
+
+        def command(args, **kwargs):
+            nonlocal fail
+            with open(self.run / ".kinetic" / "state.lock", "a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if args[3] == "batch":
+                saved = state.load(self.run, tickets=False)["verify"][self.tid]
+                self.assertEqual(saved["exit_code"], 0)
+                attempts.append(args[args.index("--idempotency-key") + 1])
+                if fail:
+                    fail = False
+                    raise OSError("connection interrupted")
+            return original(args, **kwargs)
+
+        with patch("subprocess.run", side_effect=command):
+            with self.assertRaisesRegex(ValueError, "verify recorded locally.*retry record-verify"):
+                state.record_verify(self.run, self.tid, 0, "/tmp/verify.log", at="2026-11-18T12:00:00Z")
+            self.assertEqual(state.load(self.run, tickets=False)["verify"][self.tid]["exit_code"], 0)
+            state.record_verify(self.run, self.tid, 0, "/tmp/verify.log", at="2026-11-18T12:00:00Z")
+        self.assertEqual(attempts[0], attempts[1])
+        self.assertEqual(self.orbit("show", self.tid)["properties"]["kinetic-verify"]["exit_code"], 0)
+
+    def test_initial_rejection_and_three_fix_rounds_can_escalate_then_proceed(self):
+        self.orbit("property", "set", self.tid, "kinetic", "--value", json.dumps({"repo": "api", "kind": "agent"}))
+        raw = state.init(self.run, "quick", "request")
+        raw["run_id"] = "review-run"
+        raw["ticket_store"] = {"kind": "orbit", "config": {
+            "anchor": str(self.anchor), "published": True,
+            "names": adapter_defaults(ROOT / "trackers" / "orbit.md")}}
+        state.save(self.run, raw)
+        state.record_verify(self.run, self.tid, 0, "/tmp/verify.log", command="python -m unittest")
+        state.submit_review(self.run, self.tid)
+        state.record_review(self.run, self.tid, "spec", "request-changes", "Initial finding")
+        for round_number in range(1, 4):
+            state.submit_review(self.run, self.tid, scope="fix")
+            state.record_review(self.run, self.tid, "fix", "request-changes", f"Round {round_number} finding")
+        issue = self.orbit("show", self.tid)
+        self.assertEqual(issue["properties"]["orbit"]["attempts"]["kinetic-reviewer-changes"], 4)
+        state.set_ticket(self.run, self.tid, status="needs_decision")
+        self.assertEqual(self.orbit("show", self.tid)["status"], "needs_decision")
+        state.add_ruling(self.run, "Remaining finding", "Accepted as nonblocking", "Documented concern")
+        state.set_ticket(self.run, self.tid, status="running")
+        state.submit_review(self.run, self.tid, scope="fix")
+        state.record_review(self.run, self.tid, "fix", "approve", "Nonblocking finding adjudicated")
+        state.set_ticket(self.run, self.tid, status="done_with_concerns")
+        state.set_ticket(self.run, self.tid, status="merged")
+        self.assertEqual(self.orbit("show", self.tid)["status"], "merged")
+
+    def test_unavailable_store_keeps_verify_and_alias_retry_replaces_local_key(self):
+        self.orbit("property", "set", self.tid, "kinetic", "--value", json.dumps({"repo": "api", "kind": "agent"}))
+        raw = state.init(self.run, "quick", "request")
+        raw["run_id"] = "review-run"
+        raw["ticket_store"] = {"kind": "orbit", "config": {
+            "anchor": str(self.anchor), "published": True,
+            "names": adapter_defaults(ROOT / "trackers" / "orbit.md")}}
+        state.save(self.run, raw)
+        with patch("subprocess.run", side_effect=OSError("store unavailable")):
+            with self.assertRaisesRegex(ValueError, "verify recorded locally"):
+                state.record_verify(self.run, "local-ticket", 0, "/tmp/verify.log")
+        self.assertIn("local-ticket", state.load(self.run, tickets=False)["verify"])
+        state.record_verify(self.run, "local-ticket", 0, "/tmp/verify.log")
+        self.assertEqual(set(state.load(self.run, tickets=False)["verify"]), {self.tid})

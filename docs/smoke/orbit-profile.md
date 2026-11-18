@@ -5,8 +5,10 @@ Orbit contract 1.0.0 and the native workflow, policy, hierarchy, links,
 properties, assignee, lease, batch, idempotency and profiles capabilities.
 Index and hooks are optional Orbit modules.
 
-`kinetic install --harness <claude|codex|opencode|devin>` registers the profile
-at `~/.config/orbit/profiles/kinetic.toml`. It refuses to overwrite a foreign
+When `orbit` is on PATH, `kinetic install --harness <claude|codex|opencode|devin>`
+registers the profile at `~/.config/orbit/profiles/kinetic.toml`. An install
+without Orbit creates no profile; install Orbit and rerun the installer before
+applying the named profile. It refuses to overwrite a foreign
 or edited profile. Uninstall removes the registered file only if it still
 matches the installed content; the Board's applied workflow remains in place.
 
@@ -64,12 +66,19 @@ A blocking finding uses `--verdict request-changes --reason "<finding>"`.
 Orbit restores the submitting implementer's identity, increments the profile's
 native `kinetic-reviewer-changes` attempt counter, and leaves the Issue running.
 After each fix, submit again with `--scope fix` and record `--axis fix`. Submit
-rounds are visible under `properties.orbit.review.rounds`; the fourth rejection
-after three fix attempts escalates to `needs_decision` for adjudication.
+rounds are visible under `properties.orbit.review.rounds`; the profile permits
+the initial rejection plus three fix rejections. After the
+third fix rejection, set `status=needs_decision` explicitly for adjudication.
+Accepting all remaining concerns requires a new fix submission and an approval
+with the ruling as its reason before setting `done_with_concerns` and merging.
 
 `kinetic verify` records the executed command, exit code, timestamp and log in
 run state. Published tickets also retain the latest result in the
-`kinetic-verify` Property, including failures. Orbit reserves its `evidence`
+`kinetic-verify` Property, including failures. The run state is saved before
+the store write, which runs without the state lock. If the store is unavailable,
+the command reports that the local record survived; retry `record-verify` with
+the same evidence to finish the store write without adding a duplicate.
+Orbit reserves its `evidence`
 Property: successful submission appends native evidence there. Failed or stale
 verify cannot be submitted, and each new submit clears prior review axes.
 
