@@ -276,7 +276,7 @@ class OrbitTicketStore:
             return self.config["spec_task"]
         data = call(self._anchor(st), ["list", "--include-closed", "--all", "--label",
                                        run_label(st["run_id"], self._names(st))])
-        for task in data.get("tasks", []):
+        for task in data.get("issues", []):
             if _role(task) == "spec":
                 self.config["spec_task"] = task["id"]
                 return task["id"]
@@ -563,56 +563,60 @@ class OrbitTicketStore:
         return ops
 
     def spec_ops(self, run_dir, st: dict, title: str, body: str) -> list:
-        """Batch operations publishing the run's spec Task: one `add` whose Source Key
-        matches the Task when it exists, so the ops that follow rewrite it either way."""
+        """Publish an owned epic, linking any user Issue without mutating it."""
         run_id, names = st["run_id"], self._names(st)
         key = source_key(run_id, "spec")
-        ref = f"key:{key}"
-        labels = sorted({run_label(run_id, names), names["spec"], names["hold"]})
-        annotation = {"role": "spec", "run": run_id, "phase": "awaiting-approval"}
+        existing = self._spec_id(st)
+        ref = existing or f"key:{key}"
+        labels = sorted({run_label(run_id, names), names["spec"]})
+        value = {"role": "spec", "run": run_id, "phase": "awaiting-approval"}
         text = f"{SPEC_GENERATED}\n\n{body}"
-        return [
-            {"op": "add", "key": key, "title": title, "type": "epic",
-             "labels": labels, "waiting_on": SPEC_WAITING, "body": text,
-             "annotations": {ANNOTATION_OWNER: annotation}},
-            {"op": "update", "id": ref, "title": title, "body": text,
-             "waiting_on": SPEC_WAITING},
-            {"op": "annotate", "id": ref, "owner": ANNOTATION_OWNER, "value": annotation},
-            {"op": "label", "id": ref, "add": labels},
-        ]
+        ops = [{"op": "add", "key": key, "title": title, "type": "epic",
+                "labels": labels, "body": text, "properties": {ANNOTATION_OWNER: value}},
+               {"op": "update", "id": ref, "title": title, "body": text},
+               {"op": "property", "id": ref, "owner": ANNOTATION_OWNER, "value": value}]
+        current = call(self._anchor(st), ["show", existing])["status"] if existing else "todo"
+        if current != "needs_decision":
+            if current in DONE or current == "cancelled":
+                ops.append({"op": "reopen", "id": ref})
+            ops.append({"op": "transition", "id": ref, "name": "escalate" if current == "blocked" else "ask",
+                        "by": holder(run_id)})
+        user_ref = st.get("ref")
+        if user_ref and user_ref != existing:
+            try:
+                user_issue = call(self._anchor(st), ["show", user_ref])
+            except OrbitStoreError as error:
+                if error.code != "NOT_FOUND":
+                    raise
+            else:
+                ops.append({"op": "link", "id": ref, "type": "relates-to", "to": user_issue["id"],
+                            "blocking": False})
+        return ops
 
     def publish_spec(self, run_dir, st: dict, title: str, body: str) -> dict:
-        """Publish the spec as the run's epic spec Task; republishing rewrites it."""
-        anchor = Path(self._anchor(st))
-        depth = _max_depth(anchor)
-        if depth is not None and depth < 2:
-            raise OrbitStoreError("INVALID_ARGUMENT",
-                                  "the Board nests SubTasks one level deep, but "
-                                  "the spec Task holds slices and their tickets "
-                                  f"(board.max_subtask_depth is {depth})",
-                                  DEPTH_FIX)
         keys = self._batch(st, self.spec_ops(run_dir, st, title, body)).get("keys", {})
         ref = keys[source_key(st["run_id"], "spec")]
         self.config["spec_task"] = ref
         return {"ref": ref, "published": True}
 
     def sync_spec(self, run_dir, st: dict, event: str) -> None:
-        """Mirror a spec lifecycle event on the spec Task: the gate closing clears
-        `waiting_on` and the `phase` Annotation tracks the run. The spec Task is
-        closed by _close_slices, in the Batch that finishes the last slice."""
         spec_id = self._spec_id(st)
         if not spec_id:
             return
         phase = SPEC_PHASES.get(event)
         if phase is None:
-            raise OrbitStoreError(
-                "INVALID_ARGUMENT", f"unknown spec sync event '{event}'",
-                "expected one of: " + ", ".join(sorted(SPEC_PHASES)))
-        self._batch(st, [
-            {"op": "update", "id": spec_id, "clear_waiting": True},
-            {"op": "annotate", "id": spec_id, "owner": ANNOTATION_OWNER,
-             "value": {"role": "spec", "run": st["run_id"], "phase": phase}},
-        ])
+            raise OrbitStoreError("INVALID_ARGUMENT", f"unknown spec sync event '{event}'",
+                                  "expected one of: " + ", ".join(sorted(SPEC_PHASES)))
+        current = call(self._anchor(st), ["show", spec_id])["status"]
+        ops = []
+        if event in ("gate-approved", "building") and current == "needs_decision":
+            ops.append({"op": "transition", "id": spec_id, "name": "answer", "by": holder(st["run_id"])})
+            current = "todo"
+        if event == "building" and current == "todo":
+            ops.append({"op": "claim", "id": spec_id, "by": holder(st["run_id"])})
+        ops.append({"op": "property", "id": spec_id, "owner": ANNOTATION_OWNER,
+                    "value": {"role": "spec", "run": st["run_id"], "phase": phase}})
+        self._batch(st, ops)
 
     def publish(self, run_dir, st: dict) -> dict:
         """Send every staged ticket (and new slices) in one Batch; returns provisional -> Task ID."""

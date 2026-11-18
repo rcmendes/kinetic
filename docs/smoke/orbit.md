@@ -53,3 +53,9 @@ rebuilds the snapshot. Writes use a per-run `.kinetic/orbit-write.json` journal,
 per-operation version guards and a stable idempotency key. Retry an interrupted
 operation before starting a different write; keep the journal until it succeeds.
 Version conflicts refresh guards and retry at most three times.
+
+Native hierarchy uses an owned top-level spec epic, task slices, and sub-task
+tickets. Publishing a spec links it to an existing run reference with a
+nonblocking `relates-to` link. The referenced user Issue keeps its own status,
+assignee and lifecycle. Spec approval answers the owned epic's decision gate;
+building claims only the owned epic.
