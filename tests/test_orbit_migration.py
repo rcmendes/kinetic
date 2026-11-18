@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import tempfile
+import sys
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -12,6 +13,16 @@ from pathlib import Path
 from kinetic import orbit_store, state, status
 from kinetic.tracker import ROOT, adapter_defaults
 from tests.test_orbit_store import orbit_available
+
+
+NEEDS_TOMLLIB = unittest.skipIf(sys.version_info < (3, 11), "applying a migration needs tomllib (Python 3.11+)")
+
+
+class PythonVersionTest(unittest.TestCase):
+    def test_apply_without_tomllib_names_the_python_requirement(self):
+        with patch.dict(sys.modules, {'tomllib': None}):
+            with self.assertRaisesRegex(orbit_store.OrbitStoreError, 'PYTHON_TOO_OLD'):
+                orbit_store._migration_profile({'statuses': [], 'transitions': []}, temporary=False)
 
 
 @unittest.skipUnless(orbit_available(), "native Orbit CLI not installed")
@@ -68,6 +79,7 @@ class MigrationTest(unittest.TestCase):
             state.set_ticket(self.run, self.a, worktree='/work')
         self.assertEqual(self.command('show', self.a), before)
 
+    @NEEDS_TOMLLIB
     def test_preview_is_read_only_and_apply_preserves_user_issue(self):
         before = self.command('show', self.b)
         preview = self.migrate()
@@ -90,6 +102,7 @@ class MigrationTest(unittest.TestCase):
         self.assertEqual(state.load(self.run)['tickets'][self.b]['ships_with'], 'api-web')
         self.assertEqual(self.migrate(apply=True)['migrated'], [])
 
+    @NEEDS_TOMLLIB
     def test_migration_recovers_after_committed_batch_response_is_lost(self):
         unlink = Path.unlink
         def crash(path, *args, **kwargs):

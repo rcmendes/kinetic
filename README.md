@@ -361,7 +361,7 @@ With `tracker: orbit`, a run's tickets live on an [Orbit](https://github.com/rcm
 
 ### Existing Orbit runs
 
-First migrate the Board model with `orbit migrate model` (preview), then `orbit migrate model --apply` at its anchor. Existing run metadata remains readable for status reports. Preview the kinetic conversion with `kinetic orbit_store migrate --run <run_dir>`; add `--apply` to convert that run's owned Issues to native statuses, typed links and Properties. Repeat for each existing run. Pause active implementers before applying migration.
+First migrate the Board model with `orbit migrate model` (preview), then `orbit migrate model --apply` at its anchor. Existing run metadata remains readable for status reports. Preview the kinetic conversion with `kinetic orbit_store migrate --run <run_dir>`; add `--apply` to convert that run's owned Issues to native statuses, typed links and Properties. Repeat for each existing run. Pause active implementers before applying migration. Applying a migration needs Python 3.11 or later (preview runs on any supported version).
 
 Migration changes the Board workflow. It retains existing status names for unrelated Issues, keeps old transitions with conflicting names under `legacy_<name>`, and uses native `todo` as the ready state. Unrelated Issues keep their stored status, assignee, links and timestamps; their available transitions and readiness follow the new Board workflow. Historical hierarchy and Issue IDs are retained because Orbit has no reparent operation. New runs use the three-level hierarchy. Applied profile sources remain in the run's `.kinetic` directory; keep them with the run. A failed migration can be retried; the Board's Git history records profile and Issue changes.
 

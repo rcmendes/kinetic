@@ -862,7 +862,11 @@ def _toml(value):
 
 def _migration_profile(workflow: dict, temporary: bool) -> str:
     """Retain unrelated legacy states and their routes while adding native workflow."""
-    import tomllib
+    try:
+        import tomllib
+    except ImportError:  # stdlib since Python 3.11; kinetic itself still runs on 3.9
+        raise OrbitStoreError("PYTHON_TOO_OLD", "applying a run migration needs Python 3.11 or later",
+                              "run the migration with python3.11+ (preview works on any version)")
     from kinetic.tracker import ROOT
     text = (ROOT / "profiles" / "kinetic.toml").read_text()
     native = tomllib.loads(text)["workflow"]
