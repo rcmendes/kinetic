@@ -17,10 +17,22 @@ LOCAL = {"kind": "local"}
 # Optional abilities a store may declare in capabilities(). Kinetic calls a
 # capability's methods only after has(store, name); without it, kinetic does
 # what it did before the capability existed.
-#   review-states  record_verify, submit_review, record_review
-#   checkpoint     checkpoint, last_checkpoint
-#   schedule-hints hints
-CAPABILITIES = frozenset({"review-states", "checkpoint", "schedule-hints"})
+#   review-states    record_verify, submit_review, record_review
+#   checkpoint       checkpoint, last_checkpoint
+#   schedule-hints   hints
+# Named for the stores that will declare them; each one's methods are defined by
+# the task that implements it (see docs/specs/kinetic-portable-capabilities-design.md).
+#   query            changes and rollup reads
+#   idempotent-write a repeated write is safe and may carry a version guard
+#   placement        a ticket's repo and slice round-trip as native filterable fields
+#   priority         a ticket's priority rank round-trips
+#   human-question   ask, answer, open questions
+#   external-ref     a ticket's and the spec's refs round-trip
+# Words here are kinetic's: a store maps them to its own fields.
+CAPABILITIES = frozenset({
+    "review-states", "checkpoint", "schedule-hints",
+    "query", "idempotent-write", "placement", "priority", "human-question", "external-ref",
+})
 
 
 class TicketStoreError(Exception):
