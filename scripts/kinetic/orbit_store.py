@@ -9,6 +9,8 @@ Tickets not yet published are staged in <run_dir>/.kinetic/tickets.staged.json.
 from __future__ import annotations
 
 import json
+import hashlib
+import uuid
 import re
 import subprocess
 import time
@@ -271,8 +273,93 @@ class OrbitTicketStore:
     def _batch(self, st: dict, operations: list) -> dict:
         if not operations:
             return {"keys": {}, "results": []}
-        return call(self._anchor(st), ["batch", "--file", "-"],
-                    stdin=json.dumps({"operations": operations}))
+        from kinetic.state import atomic_write, internal
+        anchor = self._anchor(st)
+        journal = internal(st["run_dir"]) / "orbit-write.json"
+        digest = hashlib.sha256(json.dumps(operations, sort_keys=True).encode()).hexdigest()
+        pending = json.loads(journal.read_text()) if journal.exists() else None
+        if pending and pending["digest"] != digest:
+            raise OrbitStoreError("PENDING_WRITE", "an interrupted Orbit write must be retried first")
+        if not pending:
+            cache = internal(st["run_dir"]) / "orbit-feed.json"
+            snapshot = json.loads(cache.read_text()).get("issues", {}) if cache.exists() else {}
+            versions = {}
+            guarded = []
+            for operation in operations:
+                op = dict(operation)
+                tid = op.get("id")
+                if tid and not tid.startswith("key:"):
+                    if tid not in versions:
+                        versions[tid] = snapshot.get(tid, {}).get("updated_at") or call(anchor, ["show", tid])["updated_at"]
+                    op["if_version"] = versions[tid]
+                guarded.append(op)
+            pending = {"digest": digest, "key": "kinetic-" + uuid.uuid4().hex,
+                       "operations": guarded}
+            atomic_write(journal, json.dumps(pending))
+        for attempt in range(3):
+            try:
+                result = call(anchor, ["batch", "--file", "-", "--idempotency-key", pending["key"]],
+                              stdin=json.dumps({"operations": pending["operations"]}))
+            except OrbitStoreError as error:
+                if error.code != "VERSION_CONFLICT" or attempt == 2:
+                    raise
+                # A rejected batch made no changes. Refresh guards before retrying;
+                # property writes remain scoped to kinetic's namespace.
+                versions = {op["id"]: call(anchor, ["show", op["id"]])["updated_at"]
+                            for op in pending["operations"] if "if_version" in op}
+                for op in pending["operations"]:
+                    if "if_version" in op:
+                        op["if_version"] = versions[op["id"]]
+                atomic_write(journal, json.dumps(pending))
+            else:
+                journal.unlink()
+                return result
+
+    def _issues(self, st: dict) -> list:
+        """Resume a durable feed snapshot; capture the cursor before the full read."""
+        from kinetic.state import atomic_write, internal
+        cache = internal(st["run_dir"]) / "orbit-feed.json"
+        anchor = self._anchor(st)
+        label = run_label(st["run_id"], self._names(st))
+        saved = json.loads(cache.read_text()) if cache.exists() else None
+        if saved and saved.get("anchor") != anchor:
+            saved = None
+        args = ["changes"] + (["--since", saved["cursor"]] if saved else [])
+        try:
+            feed = call(anchor, args)
+        except OrbitStoreError as error:
+            if not saved or error.code not in ("INVALID_ARGUMENT", "INVALID_CURSOR"):
+                raise
+            saved = None
+            feed = call(anchor, ["changes"])
+        if saved is None or any(e.get("kind") == "board.changed" for e in feed["events"]):
+            snapshot = {}
+            cursor = None
+            while True:
+                args = ["list", "--include-closed", "--all", "--label", label]
+                if cursor:
+                    args += ["--cursor", cursor]
+                page = call(anchor, args)
+                snapshot.update((issue["id"], issue) for issue in page.get("issues", []))
+                cursor = page.get("next_cursor")
+                if not cursor:
+                    break
+        else:
+            snapshot = saved["issues"]
+            for tid in {e["issue"] for e in feed["events"] if e.get("issue")}:
+                try:
+                    issue = call(anchor, ["show", tid])
+                except OrbitStoreError as error:
+                    if error.code != "NOT_FOUND":
+                        raise
+                    snapshot.pop(tid, None)
+                    continue
+                if label in issue.get("labels", []):
+                    snapshot[tid] = issue
+                else:
+                    snapshot.pop(tid, None)
+        atomic_write(cache, json.dumps({"anchor": anchor, "cursor": feed["cursor"], "issues": snapshot}))
+        return list(snapshot.values())
 
     # -- staged tickets --
     def stage_path(self, run_dir) -> Path:
@@ -304,9 +391,7 @@ class OrbitTicketStore:
             return {}  # nothing published before the run has a Board
         run_id, names = st["run_id"], self._names(st)
         label = run_label(run_id, names)
-        data = call(self._anchor(st), ["list", "--include-closed", "--all",
-                                       "--label", label])
-        tasks = data.get("tasks", [])
+        tasks = self._issues(st)
         prefix = source_key(run_id, "")
         ids = {task["source_key"][len(prefix):]: task["id"] for task in tasks
                if (task.get("source_key") or "").startswith(prefix)
