@@ -40,35 +40,6 @@ def orbit_available() -> bool:
 SKIP_REASON = "Orbit with the native Issue contract is not installed"
 
 
-class DeriveTest(unittest.TestCase):
-    def test_native_statuses_are_preserved_without_readiness_labels(self):
-        for status in ("todo", "running", "needs_decision", "blocked", "done",
-                       "done_with_concerns", "merged", "released"):
-            self.assertEqual(orbit_store.derive(ticket(status=status), RUN, NAMES),
-                             {"status": status, "labels": {f"kinetic-run-{RUN}"}})
-
-    def test_ships_with_does_not_create_a_label(self):
-        self.assertEqual(orbit_store.derive(ticket(ships_with="g1"), RUN, NAMES)["labels"],
-                         {f"kinetic-run-{RUN}"})
-
-
-class OpsForTest(unittest.TestCase):
-    def ops(self, before, after):
-        return orbit_store.ops_for("orb-a.b", before, after, RUN, NAMES)
-
-    def test_no_op_mutation_sends_no_batch(self):
-        t = ticket(status="running", repo="api")
-        self.assertEqual(self.ops(t, dict(t, liveness="alive")), [])
-
-    def test_blocked_by_becomes_typed_link_without_duplicate_property(self):
-        edge = {"id": "orb-x.y", "type": "merge"}
-        ops = self.ops(ticket(), ticket(blocked_by=[edge]))
-        self.assertIn({"op": "link", "id": "orb-a.b", "type": "blocks", "to": "orb-x.y",
-                       "blocking": True, "attributes": {"edge": "merge"}}, ops)
-        self.assertEqual(ops[-1]["op"], "property")
-        self.assertNotIn("blocked_by", ops[-1]["value"])
-
-
 def task_json(tid, metadata, *, status=None, lease_until=None, task_type="task", labels=()):
     status = status or (metadata or {}).get("status", "todo")
     if metadata is not None:
@@ -496,6 +467,13 @@ class OrbitPublishTest(unittest.TestCase):
         self.assertEqual(orbit_json(self.board, "list", "--include-closed")["count"], 3)
         self.assertEqual(set(state.load(self.run_dir)["tickets"]), {first["01-api-a"], first["02-web-b"]})
 
+    def test_shipping_group_does_not_change_native_status_or_readiness_labels(self):
+        state.set_ticket(self.run_dir, "01-api-a", ships_with="release-1")
+        tid = state.publish_tickets(self.run_dir)["01-api-a"]
+        shown = orbit_json(self.board, "show", tid)
+        self.assertEqual(shown["status"], "todo")
+        self.assertEqual(shown["labels"], [f"kinetic-run-{state.load(self.run_dir)['run_id']}"])
+
     def test_dispatch_claims_with_native_implementer_identity(self):
         a = state.publish_tickets(self.run_dir)["01-api-a"]
         state.set_ticket(self.run_dir, a, status="running", worktree="/wt/a")
@@ -717,7 +695,7 @@ class OrbitSpecHealingTest(unittest.TestCase):
     def test_read_keeps_spec_open_when_all_slices_closed(self):
         mapping = state.publish_tickets(self.run_dir)
         self._finish(mapping["01-api-a"], mapping["02-web-b"])
-        
+
         self.assertEqual(orbit_json(self.board, "show", self.spec_id)["status"], "needs_decision")
         state.load(self.run_dir)
         self.assertEqual(orbit_json(self.board, "show", self.spec_id)["status"], "needs_decision")

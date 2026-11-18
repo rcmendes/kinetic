@@ -377,20 +377,34 @@ def record_verify(run_dir, ticket_id, exit_code: int, log_path: str, repo_name=N
     if ticket_id is None and not repo_name:
         raise ValueError("repo_name is required when ticket_id is None")
     stamp = at or _now()
+    snapshot = load(run_dir, tickets=False)
+    store = ticket_store.for_state(snapshot)
+    read_error = None
+    if ticket_id is not None and not ticket_store.is_local(snapshot):
+        try:
+            snapshot["tickets"] = store.read(run_dir, snapshot)
+        except (ticket_store.TicketStoreError, OSError) as error:
+            read_error = error
+    canonical = _alias(snapshot, ticket_id)
+    key = canonical if canonical is not None else f"repo:{repo_name}"
 
     def fn(s):
-        canonical = _alias(s, ticket_id)
-        key = canonical if canonical is not None else f"repo:{repo_name}"
-        repo = repo_name or s["tickets"].get(canonical, {}).get("repo")
+        if canonical != ticket_id:
+            s["verify"].pop(ticket_id, None)
+        repo = repo_name or snapshot["tickets"].get(canonical, {}).get("repo")
         s["verify"][key] = {"exit_code": exit_code, "log_path": log_path, "at": stamp,
                             "repo": repo}
         if command is not None:
             s["verify"][key]["command"] = command
-        if ticket_id is not None:
-            store = ticket_store.for_state(s)
-            if ticket_store.has(store, "review-states"):
-                store.record_verify(run_dir, s, canonical, s["verify"][key])
-    _mutate(run_dir, fn)
+    saved = _mutate(run_dir, fn, tickets=False)
+    try:
+        if read_error is not None:
+            raise read_error
+        if ticket_id is not None and ticket_store.has(store, "review-states"):
+            store.record_verify(run_dir, saved, canonical, saved["verify"][key])
+    except (ticket_store.TicketStoreError, OSError) as error:
+        raise ValueError(f"verify recorded locally; ticket store evidence failed: {error}; "
+                         "retry record-verify") from error
 
 
 

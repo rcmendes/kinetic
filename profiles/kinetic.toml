@@ -51,7 +51,7 @@ distinct_from = ["author"]
 
 [[policy.rules]]
 name = "kinetic-reviewer-changes"
-max_attempts = 3
+max_attempts = 4
 transition = "request_changes"
 profiles = ["kinetic"]
 distinct_from = ["author"]
