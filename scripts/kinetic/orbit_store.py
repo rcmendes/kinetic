@@ -738,12 +738,16 @@ class OrbitTicketStore:
             raise ValueError("review requires a passing verify for every reviewed repo")
         issue = call(self._anchor(st), ["show", ticket_id])
         if issue["status"] == "in_review":
+            if (issue.get("properties") or {}).get("kinetic-reviews", {}).get("scope") != scope:
+                raise ValueError("submitted review has a different scope")
             return
-        if issue["status"] != "running":
+        restarting = scope == "integration" and issue["status"] == "todo"
+        if issue["status"] != "running" and not restarting:
             raise ValueError("submit review requires running work")
         role = "orchestrator" if scope == "integration" else "implementer"
         by = holder(st["run_id"], None if scope == "integration" else ticket_id, role)
-        self._batch(st, [
+        operations = [{"op": "transition", "id": ticket_id, "name": "claim", "by": by}] if restarting else []
+        self._batch(st, [*operations,
             {"op": "submit", "id": ticket_id, "by": by,
              "command": [e["command"] for e in evidence if e.get("command")],
              "exit_code": 0, "file": [e["log_path"] for e in evidence]},
@@ -763,14 +767,16 @@ class OrbitTicketStore:
         issue = call(self._anchor(st), ["show", ticket_id])
         record = dict((issue.get("properties") or {}).get("kinetic-reviews") or {})
         verdicts = dict(record.get("verdicts") or {})
-        if verdicts.get(axis) == {"verdict": verdict, "reason": reason}:
+        by = holder(st["run_id"], None if axis == "integration" else ticket_id, axis + "-reviewer")
+        outcome = {"verdict": verdict, "reason": reason, "by": by}
+        if verdicts.get(axis) == outcome:
             return
         if issue["status"] != "in_review":
             raise ValueError("record review requires submitted work")
         expected_axes = {"ticket": ("spec", "standards"), "fix": ("fix",), "integration": ("integration",)}
         if axis not in expected_axes.get(record.get("scope"), ()):
             raise ValueError("review axis does not match the submitted scope")
-        verdicts[axis] = {"verdict": verdict, "reason": reason}
+        verdicts[axis] = outcome
         record["verdicts"] = verdicts
         operations = [{"op": "property", "id": ticket_id, "owner": "kinetic-reviews", "value": record}]
         approved = (axis in ("fix", "integration") or
@@ -778,8 +784,7 @@ class OrbitTicketStore:
         if verdict == "request-changes" or approved:
             operations.append({"op": "review", "id": ticket_id, "verdict": verdict,
                                "reason": reason or None,
-                               "by": holder(st["run_id"], None if axis == "integration" else ticket_id,
-                                            axis + "-reviewer")})
+                               "by": by})
             if verdict == "approve" and axis != "integration":
                 before = st.get("tickets", {})
                 after = {**before, ticket_id: {**before.get(ticket_id, {}), "status": "done"}}

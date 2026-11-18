@@ -376,17 +376,18 @@ def record_verify(run_dir, ticket_id, exit_code: int, log_path: str, repo_name=N
                   at: str | None = None, command: str | None = None) -> None:
     if ticket_id is None and not repo_name:
         raise ValueError("repo_name is required when ticket_id is None")
-    key = ticket_id if ticket_id is not None else f"repo:{repo_name}"
     stamp = at or _now()
 
     def fn(s):
-        repo = repo_name or s["tickets"].get(ticket_id, {}).get("repo")
+        canonical = _alias(s, ticket_id)
+        key = canonical if canonical is not None else f"repo:{repo_name}"
+        repo = repo_name or s["tickets"].get(canonical, {}).get("repo")
         s["verify"][key] = {"exit_code": exit_code, "log_path": log_path, "at": stamp,
                             "repo": repo}
         if command is not None:
             s["verify"][key]["command"] = command
         if ticket_id is not None:
-            ticket_store.for_state(s).record_verify(run_dir, s, _alias(s, ticket_id), s["verify"][key])
+            ticket_store.for_state(s).record_verify(run_dir, s, canonical, s["verify"][key])
     _mutate(run_dir, fn)
 
 
