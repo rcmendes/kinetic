@@ -82,3 +82,18 @@ integration reviewer approves, and an input user Issue is never the target.
 Run `PYTHONPATH=scripts python3 -m unittest tests.test_orbit_review -v` to
 exercise native evidence, both ticket axes, fix attempts and integration review
 identities against a temporary Orbit Board.
+
+Each accepted axis records its role identity alongside its verdict in the
+`kinetic-reviews` Property. Only the aggregate verdict completes the native
+review transition, so one axis cannot approve on behalf of the other.
+
+Interrupted writes are journaled with their original request and idempotency
+key. The next store read or workflow action replays the request before reading
+status. A crash after Orbit commits a submit does not create a second evidence
+item or review round. A definitive policy rejection clears the journal so a
+corrected request can proceed; uncertain transport failures retain it.
+
+Verify accepts a provisional ticket ID after publication and records the result
+under its native Issue ID. Reworking a completed descendant can reopen its spec
+to `todo`; integration submission restarts that owned container with a workflow
+transition before submitting the new evidence, without acquiring a worker lease.

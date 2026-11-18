@@ -9,7 +9,8 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from kinetic import orbit_store
+from kinetic import orbit_store, state
+from kinetic.tracker import adapter_defaults
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -25,7 +26,7 @@ class OrbitReviewTest(unittest.TestCase):
                         GIT_CONFIG_VALUE_1="test@example.com")
         self.orbit("init", "--agents", "none")
         self.orbit("setup", str(ROOT / "profiles" / "kinetic.toml"))
-        self.tid = self.orbit("add", "Implement feature")["id"]
+        self.tid = self.orbit("add", "Implement feature", "--source-key", "kinetic:review-run:local-ticket", "--label", "kinetic-run-review-run")["id"]
         self.run = self.anchor / "run"
         self.st = {"run_id": "review-run", "run_dir": str(self.run)}
         self.store = orbit_store.make({"anchor": str(self.anchor)})
@@ -51,6 +52,9 @@ class OrbitReviewTest(unittest.TestCase):
         self.store.record_review(self.run, self.st, self.tid, "standards", "approve")
         issue = self.orbit("show", self.tid)
         self.assertEqual(issue["status"], "done")
+        verdicts = issue["properties"]["kinetic-reviews"]["verdicts"]
+        self.assertNotEqual(verdicts["spec"]["by"], verdicts["standards"]["by"])
+        self.assertEqual(verdicts["spec"]["by"], orbit_store.holder("review-run", self.tid, "spec-reviewer"))
         review = issue["properties"]["orbit"]["review"]
         self.assertNotEqual(review["submitted_by"], review["reviewed_by"])
         self.assertEqual(review["verdict"], "approve")
@@ -74,6 +78,8 @@ class OrbitReviewTest(unittest.TestCase):
         self.assertEqual(self.orbit("show", self.tid)["status"], "running")
 
     def test_integration_review_uses_distinct_run_identity(self):
+        child = self.orbit("add", "Child work", "--parent", self.tid)["id"]
+        self.orbit("done", child)
         self.orbit("release", self.tid, "--by", orbit_store.holder("review-run", self.tid, "implementer"))
         self.orbit("claim", self.tid, "--by", orbit_store.holder("review-run"))
         self.store.submit_review(self.run, self.st, self.tid, [self.evidence], scope="integration")
@@ -81,6 +87,12 @@ class OrbitReviewTest(unittest.TestCase):
         record = self.orbit("show", self.tid)["properties"]["orbit"]["review"]
         self.assertEqual((record["submitted_by"], record["reviewed_by"]),
                          ("kinetic-review-run-orchestrator", "kinetic-review-run-integration-reviewer"))
+        self.orbit("reopen", child)
+        self.assertEqual(self.orbit("show", self.tid)["status"], "todo")
+        self.orbit("done", child)
+        self.store.submit_review(self.run, self.st, self.tid, [self.evidence], scope="integration")
+        self.store.record_review(self.run, self.st, self.tid, "integration", "approve")
+        self.assertEqual(self.orbit("show", self.tid)["properties"]["orbit"]["review"]["rounds"], 2)
 
     def test_committed_submit_recovers_after_crash_before_journal_cleanup(self):
         original = Path.unlink
@@ -100,3 +112,17 @@ class OrbitReviewTest(unittest.TestCase):
         restored.record_review(self.run, self.st, self.tid, "spec", "approve")
         restored.record_review(self.run, self.st, self.tid, "standards", "approve")
         self.assertEqual(self.orbit("show", self.tid)["status"], "done")
+
+    def test_verify_provisional_id_can_submit_its_published_ticket(self):
+        self.orbit("property", "set", self.tid, "kinetic", "--value", json.dumps({"repo": "api", "kind": "agent"}))
+        raw = state.init(self.run, "quick", "request")
+        raw["run_id"] = "review-run"
+        raw["ticket_store"] = {"kind": "orbit", "config": {
+            "anchor": str(self.anchor), "published": True,
+            "names": adapter_defaults(ROOT / "trackers" / "orbit.md")}}
+        state.save(self.run, raw)
+        state.record_verify(self.run, "local-ticket", 0, "/tmp/verify.log", command="python -m unittest")
+        state.submit_review(self.run, "local-ticket")
+        raw = state.load(self.run)
+        self.assertIn(self.tid, raw["verify"])
+        self.assertEqual(raw["tickets"][self.tid]["status"], "in_review")
