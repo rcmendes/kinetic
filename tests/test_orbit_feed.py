@@ -88,7 +88,7 @@ class FeedTest(unittest.TestCase):
 
     def test_new_store_instance_resumes_durable_snapshot_and_fetches_changes(self):
         self.store.read(self.run, self.st)
-        self.issue['annotations']['kinetic']['worktree'] = '/new'
+        self.issue['properties']['kinetic']['worktree'] = '/new'
         self.events = [{'kind': 'issue.updated', 'issue': 'orb-a'}]
         restored = orbit_store.make(dict(self.store.config))
         self.assertEqual(restored.read(self.run, self.st)['orb-a']['worktree'], '/new')
