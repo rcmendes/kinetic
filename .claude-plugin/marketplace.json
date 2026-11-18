@@ -1,12 +1,14 @@
 {
   "name": "kinetic",
-  "owner": {"name": "rcmendes"},
+  "owner": {
+    "name": "rcmendes"
+  },
   "plugins": [
     {
       "name": "kinetic",
       "source": "./",
       "description": "SDLC pipeline: grill, spec, tickets, multi-repo build, review, ship, retro",
-      "version": "0.3.1"
+      "version": "0.6.0"
     }
   ]
 }

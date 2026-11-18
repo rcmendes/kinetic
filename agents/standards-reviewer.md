@@ -13,7 +13,7 @@ You judge one question: does this diff follow the repo's documented standards? W
 ## Brief
 
 - `Run: <run_dir>`
-- `Identity: kinetic-<run-id>-standards-reviewer-<id>` (the Orbit actor for this dispatch)
+- `Identity: kinetic-<run-id>-standards-reviewer-<id>` (the tracker actor for this dispatch)
 - `Ticket: <id>`
 - `Repo: <worktree>`
 - `Diff: <integration>...<ticket-branch>`

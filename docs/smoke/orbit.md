@@ -1,61 +1,32 @@
-# Orbit tracker smoke checklist
+# Native Orbit tracker smoke checklist
 
-Manual acceptance test for `tracker: orbit`. Run it once against a real Orbit
-Board with `orbit` 0.11.0 or later (contract 1 and the kinetic profile),
-and record the date, `orbit --version`, and pass/fail per step at the bottom.
+Use Orbit 0.11.0 or later with contract 1. Scripted checks run with
+`PYTHONPATH=scripts python3 -m unittest tests.test_orbit_hierarchy tests.test_orbit_native_links tests.test_orbit_identity tests.test_orbit_feed tests.test_orbit_migration`.
 
-## Setup
+## Fresh Board
 
-1. A scratch kinetic project (`/kinetic:start`) with one repo and its verify command registered by discover.
-2. `orbit init` in the project folder (the Board anchor); in the Board's
-   `config.toml` add `"kinetic"` to `non_ready_labels` and
-   `max_subtask_depth = 2` under `[board]`.
-3. From the project folder: `kinetic project update --json '{"tracker": "orbit"}'`
-   (add `tracker_settings.orbit_dir` if the Board is not at the project folder).
-4. `kinetic doctor`: `orbit-binary`, `orbit-board`, `orbit-contract`,
-   `orbit-capabilities` and `orbit-profile` all pass.
+1. Create a scratch kinetic project and register one repository and its verify command.
+2. Run `orbit init`, then `orbit setup <kinetic-clone>/profiles/kinetic.toml` at the Board anchor. Alternatively, install kinetic for the harness and use `orbit setup kinetic`.
+3. Set the project tracker to `orbit`, with `tracker_settings.orbit_dir` when needed. Doctor's `orbit-binary`, `orbit-board`, `orbit-contract`, `orbit-capabilities` and `orbit-profile` rows pass.
+4. Publish a feature spec, approve its gate and publish two tickets under one slice. `orbit tree <spec>` shows an epic, task slice and sub-task tickets. The spec initially uses `needs_decision`; approval moves it to `todo`, and build starts it as `running`.
+5. A run started from a user Issue links its owned spec to that Issue. The user Issue's status, assignee and timestamps remain unchanged.
+6. Dispatch a ticket. Its native status is `running`; its assignee and lease holder are `kinetic-<run-id>-implementer-<ticket-id>`. Post-tool activity renews the exact owner at most every five minutes. Expiry appears in status as “implementer may be stuck.”
+7. Verify and submit the ticket for review. Inspect evidence and attempt metadata. Spec and standards reviewers use separate identities; both approvals complete the ticket. A request for changes resumes the implementer and advances the attempt. Reviewers never take the author's lease.
+8. Merge completed tickets. Slice completion leaves the spec open; integration review approves the spec. Human completion remains manual.
+9. Status resumes the change feed. A repeated write after a lost response reuses its idempotency key; a concurrent version conflict refreshes and retries up to three times.
 
-## Run
+## Existing run
 
-5. Start a feature-lane run with a spec and two tickets in one slice, the
-   second blocked by the first.
-6. After specify, `kinetic state publish-spec` files the spec Task:
-   `orbit list --type epic` shows it and `orbit ready` never offers it;
-   `orbit show <spec>` shows the `kinetic` Annotation `{"role": "spec",
-   "phase": "awaiting-approval"}` and `waiting_on` "kinetic: spec approval".
-7. Approve the spec gate: `orbit show <spec>` has no `waiting_on` and the
-   Annotation's `phase` is `approved`.
-8. Before the breakdown gate: `orbit list --label kinetic-run-<run id>` shows
-   only the spec and `<run_dir>/.kinetic/tickets.staged.json` holds both tickets.
-9. Approve the breakdown gate: `orbit tree <spec>` shows the spec epic, the
-   slice Task under it and both ticket SubTasks (three levels); the second
-   ticket depends on the first; both carry `kinetic`; the spec's `phase` is
-   `building`.
-10. When the first ticket dispatches: `orbit show <id>` is `in_progress`,
-    claimed by `kinetic-<run id>`, without the `kinetic` label;
-    `orbit ready` (from another shell) never offers it.
-11. While the implementer works, `/kinetic:status` shows no stuck ticket and
-    `lease_until` moves forward at least every 5 minutes.
-12. After both tickets are done, the slice Task is `done` and the spec epic
-    is `done`.
-13. Mark a human ticket done with `orbit done <id>`; `/kinetic:status` shows
-    it done.
+1. Preview `orbit migrate model`, then apply it at the existing Board anchor. It moves legacy Annotations into Properties.
+2. Open the old run's status before kinetic migration; its recorded statuses and relationships remain visible.
+3. Preview `kinetic orbit_store migrate --run <run_dir>` and check the operations. Preview changes no Board records or workflow.
+4. Pause active implementers, then repeat with `--apply`. Owned Issues use native status and links; execution metadata remains in the `kinetic` Property. Retrying reports no further migrated tickets.
+5. Confirm unrelated Issues retain their stored fields. Migration preserves their legacy status names and transition routes (`legacy_` names for collisions), while native `todo` becomes the ready state. Historical hierarchy/IDs remain; new runs use three levels.
+6. Keep generated profile sources with the run's `.kinetic` folder. If interrupted, rerun migration before starting another state write.
 
-## Results
+## Live harness results
 
-| Date | `orbit --version` | Steps passed | Notes |
-|---|---|---|---|
+| Date | Harness | Orbit version | Steps passed | Notes |
+|---|---|---|---|---|
 
-Native Orbit reads keep a disposable `.kinetic/orbit-feed.json` snapshot per run.
-Status and board resume `orbit changes --since` and fetch only changed Issues;
-removing the snapshot rebuilds it from the Board. A rewritten Board history also
-rebuilds the snapshot. Writes use a per-run `.kinetic/orbit-write.json` journal,
-per-operation version guards and a stable idempotency key. Retry an interrupted
-operation before starting a different write; keep the journal until it succeeds.
-Version conflicts refresh guards and retry at most three times.
-
-Native hierarchy uses an owned top-level spec epic, task slices, and sub-task
-tickets. Publishing a spec links it to an existing run reference with a
-nonblocking `relates-to` link. The referenced user Issue keeps its own status,
-assignee and lifecycle. Spec approval answers the owned epic's decision gate;
-building claims only the owned epic.
+Scripted tests do not substitute for running an actual implementer and reviewer through a supported harness.

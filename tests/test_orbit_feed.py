@@ -22,6 +22,7 @@ class FeedTest(unittest.TestCase):
         self.fail_batch = False
         self.conflict = False
         self.events = []
+        self.reject = False
         self.store = orbit_store.make({'anchor': str(self.run), 'published': True,
                                       'names': adapter_defaults(ROOT / 'trackers/orbit.md')})
         self.st = {'run_id': 'r', 'run_dir': str(self.run), 'slices': []}
@@ -43,6 +44,10 @@ class FeedTest(unittest.TestCase):
         elif command == 'show':
             data = self.issue
         elif command == 'batch':
+            if self.reject:
+                self.reject = False
+                return subprocess.CompletedProcess(args, 1, json.dumps({'ok': False, 'error': {
+                    'code': 'POLICY_REJECTED', 'message': 'missing verify evidence'}}), '')
             if self.fail_batch:
                 raise OSError('lost connection')
             if self.conflict:
@@ -94,3 +99,12 @@ class FeedTest(unittest.TestCase):
         self.assertEqual(restored.read(self.run, self.st)['orb-a']['worktree'], '/new')
         self.issue['labels'] = []
         self.assertEqual(restored.read(self.run, self.st), {})
+
+    def test_policy_rejection_allows_a_corrected_write(self):
+        before = self.store.read(self.run, self.st)
+        self.reject = True
+        with self.assertRaises(orbit_store.OrbitStoreError):
+            self.store.write(self.run, self.st, before, {'orb-a': dict(before['orb-a'], worktree='/bad')})
+        self.store.write(self.run, self.st, before, {'orb-a': dict(before['orb-a'], worktree='/corrected')})
+        batches = [args for args, _ in self.requests if args[3] == 'batch']
+        self.assertEqual(len(batches), 2)

@@ -15,7 +15,7 @@ Every ticket was reviewed on its own. You review what they add up to: each repo'
 ## Brief
 
 - `Run: <run_dir>`
-- `Identity: kinetic-<run-id>-integration-reviewer` (the Orbit actor for this dispatch)
+- `Identity: kinetic-<run-id>-integration-reviewer` (the tracker actor for this dispatch)
 - `Spec: <ticket reference or <run_dir>/spec.md>` and `Tracker adapter: <path>` (follow its "fetch" operation for a reference)
 - One line per repo: `Repo: <name> <integration worktree> <base_branch>..<integration_branch>`
 - `Merge order: <repo>, <repo>, ...`

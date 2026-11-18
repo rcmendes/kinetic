@@ -71,6 +71,9 @@ class OpsForTest(unittest.TestCase):
 
 def task_json(tid, metadata, *, status=None, lease_until=None, task_type="task", labels=()):
     status = status or (metadata or {}).get("status", "todo")
+    if metadata is not None:
+        metadata = {key: value for key, value in metadata.items()
+                    if key not in ("status", "slice", "assignee", "blocked_by", "after", "related", "ships_with")}
     return {"id": tid, "type": task_type, "status": status, "lease_until": lease_until,
             "updated_at": "2026-11-18T00:00:00Z", "labels": list(labels), "links": [],
             "properties": {"kinetic": metadata} if metadata is not None else {}}

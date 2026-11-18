@@ -13,7 +13,7 @@ A full review of this ticket already happened. An implementer has tried to fix i
 ## Brief
 
 - `Run: <run_dir>`
-- `Identity: kinetic-<run-id>-fix-reviewer-<id>` (the Orbit actor for this dispatch)
+- `Identity: kinetic-<run-id>-fix-reviewer-<id>` (the tracker actor for this dispatch)
 - `Ticket: <id>`
 - `Repo: <worktree>`
 - `Findings: <run_dir>/reviews/<id>-findings-N.md` (the confirmed findings for this round, one per line with an id)
