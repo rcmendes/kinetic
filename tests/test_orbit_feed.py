@@ -15,9 +15,9 @@ class FeedTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.run = Path(self.tmp.name)
-        self.issue = {'id': 'orb-a', 'updated_at': 'v1', 'status': 'todo',
+        self.issue = {'id': 'orb-a', 'updated_at': 'v1', 'status': 'running',
                       'labels': ['kinetic-run-r'],
-                      'annotations': {'kinetic': state.ticket_defaults()}}
+                      'annotations': {'kinetic': dict(state.ticket_defaults(), status='running')}}
         self.requests = []
         self.fail_batch = False
         self.conflict = False
@@ -31,7 +31,10 @@ class FeedTest(unittest.TestCase):
     def command(self, args, **kw):
         command = args[3]
         self.requests.append((args, kw))
-        if command == 'changes':
+        if command == 'capabilities':
+            data = {'contract': '1.0.0', 'board': {'contract': '1.0.0', 'compatible': True},
+                    'capabilities': sorted(orbit_store.REQUIRED_CAPABILITIES), 'modules': []}
+        elif command == 'changes':
             data = {'cursor': 'head', 'events': []}
         elif command == 'list':
             data = {'issues': [self.issue]}

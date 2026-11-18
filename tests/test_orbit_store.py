@@ -396,7 +396,7 @@ class OrbitHandshakeTest(unittest.TestCase):
         self.capabilities["capabilities"].remove("lease")
         self.binary()
         with self.assertRaises(orbit_store.OrbitStoreError) as caught:
-            self.store().read(self.root, {"run_id": RUN})
+            self.store().read(self.root, {"run_id": RUN, "run_dir": str(self.root)})
         self.assertEqual(caught.exception.code, "MISSING_CAPABILITIES")
         self.assertIn("lease, links", str(caught.exception))
 
@@ -404,14 +404,14 @@ class OrbitHandshakeTest(unittest.TestCase):
         self.capabilities["contract"] = "2.0.0"
         self.binary()
         with self.assertRaises(orbit_store.OrbitStoreError) as caught:
-            self.store().read(self.root, {"run_id": RUN})
+            self.store().read(self.root, {"run_id": RUN, "run_dir": str(self.root)})
         self.assertEqual(caught.exception.code, "CONTRACT_VERSION_UNSUPPORTED")
 
     def test_read_rejects_board_contract_the_binary_cannot_read(self):
         self.capabilities["board"] = {"contract": "1.1.0", "compatible": False}
         self.binary()
         with self.assertRaises(orbit_store.OrbitStoreError) as caught:
-            self.store().read(self.root, {"run_id": RUN})
+            self.store().read(self.root, {"run_id": RUN, "run_dir": str(self.root)})
         self.assertEqual(caught.exception.code, "CONTRACT_VERSION_UNSUPPORTED")
 
     def test_doctor_accepts_absent_optional_modules(self):
