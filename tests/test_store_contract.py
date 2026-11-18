@@ -101,6 +101,11 @@ class StoreContract:
         store cannot show that; the placement section is skipped without it."""
         return None
 
+    def native_priority(self, ticket_id):
+        """The ticket's priority as an index into the store's own ordered names (0 is highest),
+        or None if the store cannot show that; the priority section is skipped without it."""
+        return None
+
     def need(self, capability):
         if not ticket_store.has(self.store(), capability):
             self.skipTest(f"store does not declare {capability}")
@@ -184,6 +189,13 @@ class StoreContract:
             self.skipTest("store gives no native view of placement")
         self.assertEqual(placed, ("svc", "core"))
 
+    def test_priority_follows_the_critical_path(self):
+        self.need("priority")
+        first, waits = self.native_priority(self.a), self.native_priority(self.b)
+        if first is None:
+            self.skipTest("store gives no native view of priority")
+        self.assertLess(first, waits)  # a blocks b, so a ranks higher
+
     def test_a_question_parks_the_ticket_and_an_answer_returns_it(self):
         self.need("human-question")
         state.set_ticket(self.run_dir, self.a, status="running")
@@ -239,6 +251,12 @@ class OrbitStoreContract(StoreContract, unittest.TestCase):
                               cwd=self.anchor, capture_output=True, text=True)
         issue = json.loads(done.stdout)["data"]
         return issue.get("repository"), issue.get("component")
+
+    def native_priority(self, ticket_id):
+        done = subprocess.run(["orbit", "--dir", str(self.anchor), "show", ticket_id, "--json"],
+                              cwd=self.anchor, capture_output=True, text=True)
+        names = ["highest", "high", "medium", "low"]
+        return names.index(json.loads(done.stdout)["data"]["priority"])
 
     def prepare(self, anchor):
         for args in (["init", "."], ["setup", str(ROOT / "profiles" / "kinetic.toml")]):
