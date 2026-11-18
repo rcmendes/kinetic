@@ -734,3 +734,25 @@ class LegacyPhaseTest(unittest.TestCase):
             run = Path(d) / "run"
             state.init(run, "epic", "X-1")
             self.assertEqual(state.set_phase(run, "tickets")["phase"], "decompose")
+
+
+class RefsFieldTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        from pathlib import Path
+        self.run_dir = Path(tmp.name)
+        state.init(self.run_dir, lane="feature", ref="x")
+
+    def test_refs_default_to_none_and_keep_their_url(self):
+        state.set_ticket(self.run_dir, "t", repo="api")
+        self.assertEqual(state.load(self.run_dir)["tickets"]["t"].get("refs", []), [])
+        state.set_ticket(self.run_dir, "t", refs=[{"system": "jira", "id": "P-1", "url": "https://x/P-1"}])
+        self.assertEqual(state.load(self.run_dir)["tickets"]["t"]["refs"][0]["url"], "https://x/P-1")
+
+    def test_a_malformed_ref_is_refused(self):
+        for bad in ("jira:P-1", [{"system": "jira"}], [{"system": "", "id": "1"}],
+                    [{"system": "a b", "id": "1"}], [{"system": "jira", "id": "1", "url": 3}]):
+            with self.assertRaises(ValueError, msg=bad):
+                state.set_ticket(self.run_dir, "t", refs=bad)
