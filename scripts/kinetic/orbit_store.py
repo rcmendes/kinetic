@@ -366,6 +366,17 @@ class OrbitTicketStore:
             self._negotiated = True
         return self.config["anchor"]
 
+    def _resume_pending(self, st: dict) -> None:
+        from kinetic.state import internal
+        journal = internal(st["run_dir"]) / "orbit-write.json"
+        if journal.exists():
+            pending = json.loads(journal.read_text())
+            request = pending.get("request")
+            if request is None:
+                request = [{k: v for k, v in op.items() if k != "if_version"}
+                           for op in pending["operations"]]
+            self._batch(st, request)
+
     def _batch(self, st: dict, operations: list) -> dict:
         if not operations:
             return {"keys": {}, "results": []}
@@ -375,7 +386,8 @@ class OrbitTicketStore:
         digest = hashlib.sha256(json.dumps(operations, sort_keys=True).encode()).hexdigest()
         pending = json.loads(journal.read_text()) if journal.exists() else None
         if pending and pending["digest"] != digest:
-            raise OrbitStoreError("PENDING_WRITE", "an interrupted Orbit write must be retried first")
+            self._resume_pending(st)
+            return self._batch(st, operations)
         if not pending:
             cache = internal(st["run_dir"]) / "orbit-feed.json"
             snapshot = json.loads(cache.read_text()).get("issues", {}) if cache.exists() else {}
@@ -390,14 +402,19 @@ class OrbitTicketStore:
                     op["if_version"] = versions[tid]
                 guarded.append(op)
             pending = {"digest": digest, "key": "kinetic-" + uuid.uuid4().hex,
-                       "operations": guarded}
+                       "operations": guarded, "request": operations}
             atomic_write(journal, json.dumps(pending))
         for attempt in range(3):
             try:
                 result = call(anchor, ["batch", "--file", "-", "--idempotency-key", pending["key"]],
                               stdin=json.dumps({"operations": pending["operations"]}))
             except OrbitStoreError as error:
-                if error.code != "VERSION_CONFLICT" or attempt == 2:
+                if error.code != "VERSION_CONFLICT":
+                    if error.code not in ("LOCKED", "BAD_OUTPUT", "ORBIT_FAILED"):
+                        journal.unlink(missing_ok=True)
+                    raise
+                if attempt == 2:
+                    journal.unlink(missing_ok=True)
                     raise
                 # A rejected batch made no changes. Refresh guards before retrying;
                 # property writes remain scoped to kinetic's namespace.
@@ -413,6 +430,7 @@ class OrbitTicketStore:
 
     def _issues(self, st: dict) -> list:
         """Resume a durable feed snapshot; capture the cursor before the full read."""
+        self._resume_pending(st)
         from kinetic.state import atomic_write, internal
         cache = internal(st["run_dir"]) / "orbit-feed.json"
         anchor = self._anchor(st)
@@ -626,6 +644,7 @@ class OrbitTicketStore:
 
     def spec_ops(self, run_dir, st: dict, title: str, body: str) -> list:
         """Publish an owned epic, linking any user Issue without mutating it."""
+        self._resume_pending(st)
         run_id, names = st["run_id"], self._names(st)
         key = source_key(run_id, "spec")
         existing = self._spec_id(st)
@@ -662,6 +681,7 @@ class OrbitTicketStore:
         return {"ref": ref, "published": True}
 
     def sync_spec(self, run_dir, st: dict, event: str) -> None:
+        self._resume_pending(st)
         spec_id = self._spec_id(st)
         if not spec_id:
             return
@@ -682,6 +702,7 @@ class OrbitTicketStore:
 
     def publish(self, run_dir, st: dict) -> dict:
         """Send every staged ticket (and new slices) in one Batch; returns provisional -> Task ID."""
+        self._resume_pending(st)
         staged = self._staged(run_dir)
         if not staged:
             return {}
@@ -701,6 +722,7 @@ class OrbitTicketStore:
         return mapping
 
     def record_verify(self, run_dir, st: dict, ticket_id: str, evidence: dict) -> None:
+        self._resume_pending(st)
         if ticket_id in self._staged(run_dir):
             return
         # Orbit reserves evidence for submit; keep failed and pre-submit verify here.
@@ -708,6 +730,7 @@ class OrbitTicketStore:
 
     def submit_review(self, run_dir, st: dict, ticket_id: str, evidence: list,
                       scope: str = "ticket") -> None:
+        self._resume_pending(st)
         if scope not in ("ticket", "fix", "integration"):
             raise ValueError("review scope must be ticket, fix or integration")
         if not evidence or any(e.get("exit_code") != 0 for e in evidence):
@@ -729,6 +752,7 @@ class OrbitTicketStore:
 
     def record_review(self, run_dir, st: dict, ticket_id: str, axis: str,
                       verdict: str, reason: str = "") -> None:
+        self._resume_pending(st)
         if axis not in ("spec", "standards", "fix", "integration"):
             raise ValueError("review axis must be spec, standards, fix or integration")
         if verdict not in ("approve", "request-changes"):
@@ -762,6 +786,7 @@ class OrbitTicketStore:
         self._batch(st, operations)
 
     def touch(self, run_dir, st: dict, ticket_id: str) -> None:
+        self._resume_pending(st)
         anchor = self._anchor(st)
         issue = call(anchor, ["show", ticket_id])
         who = holder(st["run_id"], ticket_id, "implementer")

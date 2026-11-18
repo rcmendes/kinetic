@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from kinetic import orbit_store
@@ -80,3 +81,22 @@ class OrbitReviewTest(unittest.TestCase):
         record = self.orbit("show", self.tid)["properties"]["orbit"]["review"]
         self.assertEqual((record["submitted_by"], record["reviewed_by"]),
                          ("kinetic-review-run-orchestrator", "kinetic-review-run-integration-reviewer"))
+
+    def test_committed_submit_recovers_after_crash_before_journal_cleanup(self):
+        original = Path.unlink
+        def crash(path, *args, **kwargs):
+            if path.name == "orbit-write.json":
+                raise OSError("client crashed after commit")
+            return original(path, *args, **kwargs)
+        with patch.object(Path, "unlink", crash):
+            with self.assertRaisesRegex(OSError, "client crashed"):
+                self.store.submit_review(self.run, self.st, self.tid, [self.evidence])
+        restored = orbit_store.make(dict(self.store.config))
+        restored.submit_review(self.run, self.st, self.tid, [self.evidence])
+        self.assertFalse((self.run / ".kinetic" / "orbit-write.json").exists())
+        issue = self.orbit("show", self.tid)
+        self.assertEqual(issue["properties"]["orbit"]["review"]["rounds"], 1)
+        self.assertEqual(len(issue["properties"]["evidence"]["items"]), 1)
+        restored.record_review(self.run, self.st, self.tid, "spec", "approve")
+        restored.record_review(self.run, self.st, self.tid, "standards", "approve")
+        self.assertEqual(self.orbit("show", self.tid)["status"], "done")
