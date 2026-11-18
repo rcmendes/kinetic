@@ -41,6 +41,7 @@ class InstallCase(unittest.TestCase):
                         ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copytree(ROOT / "bin", path / "bin",
                         ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copytree(ROOT / "profiles", path / "profiles")
         return path
 
     def _run(self, clone, *args):

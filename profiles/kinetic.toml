@@ -1,0 +1,56 @@
+name = "kinetic"
+description = "Kinetic spec, slice and ticket workflow"
+contract = "1.0.0"
+requires = ["workflow", "policy", "issue-types", "hierarchy", "links", "properties", "assignee", "lease", "batch", "idempotency", "profiles"]
+optional = ["index", "hooks"]
+
+[roles]
+implementer = "agent"
+reviewer = "agent"
+human = "human"
+
+[workflow]
+initial = "todo"
+statuses = [
+  { name = "todo", category = "todo", ready = true },
+  { name = "running", category = "active" },
+  { name = "needs_decision", category = "active" },
+  { name = "blocked", category = "active" },
+  { name = "in_review", category = "active" },
+  { name = "done", category = "done" },
+  { name = "done_with_concerns", category = "done" },
+  { name = "merged", category = "done" },
+  { name = "released", category = "done" },
+  { name = "cancelled", category = "canceled" },
+]
+transitions = [
+  { name = "claim", from = ["todo", "running"], to = "running" },
+  { name = "release", from = ["running"], to = "todo" },
+  { name = "submit", from = ["running"], to = "in_review" },
+  { name = "approve", from = ["in_review"], to = "done", resolution = "completed" },
+  { name = "request_changes", from = ["in_review"], to = "running" },
+  { name = "ask", from = ["todo", "running", "in_review"], to = "needs_decision" },
+  { name = "escalate", from = ["todo", "running", "in_review", "blocked"], to = "needs_decision" },
+  { name = "answer", from = ["needs_decision"], to = "todo" },
+  { name = "block", from = ["todo", "running", "in_review"], to = "blocked" },
+  { name = "resume", from = ["blocked", "needs_decision"], to = "running" },
+  { name = "done", from = ["todo", "running", "in_review", "blocked", "needs_decision"], to = "done", resolution = "completed" },
+  { name = "concerns", from = ["running", "in_review"], to = "done_with_concerns", resolution = "completed" },
+  { name = "merge", from = ["done", "done_with_concerns"], to = "merged", resolution = "completed" },
+  { name = "release_artifact", from = ["merged"], to = "released", resolution = "completed" },
+  { name = "cancel", from = ["todo", "running", "in_review", "blocked", "needs_decision"], to = "cancelled", resolution = "cancelled" },
+  { name = "reopen", from = ["done", "done_with_concerns", "merged", "released", "cancelled"], to = "todo" },
+]
+
+[[policy.rules]]
+name = "kinetic-reviewer-approve"
+transition = "approve"
+profiles = ["kinetic"]
+require_properties = ["evidence"]
+distinct_from = ["author"]
+
+[[policy.rules]]
+name = "kinetic-reviewer-changes"
+transition = "request_changes"
+profiles = ["kinetic"]
+distinct_from = ["author"]

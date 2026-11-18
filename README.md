@@ -326,7 +326,7 @@ The tracker is where tickets live. A project has one tracker, kept in `<project>
 | `github` | `gh` | `github_repo` |
 | `linear` | a Linear MCP server | `linear_team` |
 | `local` (the default) | nothing | none |
-| `orbit` | `orbit` with Batches and Annotations (0.10.16 or later) | none; optional `orbit_dir` |
+| `orbit` | `orbit` 0.11.0 or later, contract 1 and the kinetic profile | none; optional `orbit_dir` |
 | `other` | whatever you describe | `tracker_description` |
 
 Each tracker is one prose file, `trackers/<name>.md`, that tells the skills how to create a ticket, link blockers, set a status and so on in that tracker. No Python talks to a tracker, so adding one means adding one adapter file. Skills use roles, not tracker words: `names.kind.human` (the label or type for a human ticket), `names.edge.merge`, `names.after`, `names.ships_with`, `names.related` and `names.status.<role>`.
@@ -345,6 +345,8 @@ To rename any of these for your project, override them in the project config:
 
 ### Orbit: tickets on an Orbit Board
 
+The native Orbit workflow is shipped in `profiles/kinetic.toml`. `kinetic install --harness <name>` registers it with Orbit; run `orbit setup kinetic` at the Board anchor to apply it. See [the profile smoke check](docs/smoke/orbit-profile.md) for native statuses, review policy and setup verification. Applying the profile changes the Board workflow; migrate existing runs before switching them.
+
 With `tracker: orbit` a run's tickets live on an [Orbit](https://github.com/rcmendes/orbit) Board instead of in `state.json`, so there is one copy and nothing to drift. kinetic still schedules: the frontier, edge types, the parallel cap and fix rounds are unchanged. This works through the **ticket store**, the interface `state.py` reads and writes tickets through; every other tracker uses the local ticket store, exactly as before.
 
 - **What lives where.** The run's spec is a top-level Task (`type: epic`); each slice is a plain Task nested under it and each ticket a SubTask of its slice (runs published before spec Tasks keep slices as `epic` Parent Tasks). The spec gate's answer is mirrored on the spec Task (its waiting reason and a `phase` Annotation), and it closes when the last slice finishes. Every kinetic field is in the Task's `kinetic` Annotation; Orbit's status, claim, waiting reason and labels are derived from it. A `blocked_by` edge is an Orbit dependency, with its edge type in the Annotation. Every Task of a run carries the label `kinetic-run-<run id>`.
@@ -352,7 +354,7 @@ With `tracker: orbit` a run's tickets live on an [Orbit](https://github.com/rcme
 - **Other agents keep out.** Waiting agent tickets carry the hold label `kinetic`; add it to `non_ready_labels` in the Board's `config.toml` (doctor warns until you do). kinetic removes it and claims the Task in one batch when it dispatches the ticket.
 - **People.** A human ticket carries `ready-for-human`; finish it with `orbit done <id>`. An agent ticket marked done outside kinetic becomes `needs_decision`, because it has no passing verify.
 - **Liveness.** kinetic's PostToolUse hooks heartbeat the running ticket's claim at most every 5 minutes; `/kinetic:status` lists a running ticket whose lease lapsed as "implementer may be stuck".
-- **Board.** Found from `tracker_settings.orbit_dir`, else the run's first repo, then fixed for the run. `kinetic doctor` checks the binary, the Board, the export schema, the SubTask depth (`max_subtask_depth = 2`) and the hold label.
+- **Board.** Found from `tracker_settings.orbit_dir`, else the run's first repo, then fixed for the run. On first Board access, kinetic checks `orbit capabilities`: both contracts must be major 1 and the binary must provide workflow, policy, issue types, hierarchy, links, properties, assignee, lease, batch, idempotency, profiles and setup. Missing requirements stop the operation with their names. Optional remote, workspace, scheduler, hooks and index modules may be absent. Each ticket uses `kinetic-<run-id>-implementer-<ticket-id>` as assignee and lease actor. Spec, standards, fix and integration reviewers have distinct role identities and never claim the author's lease. Post-tool hooks renew only the active implementer assignee, at most every five minutes per worktree. `kinetic doctor` checks the binary, Board contract, capabilities, and the kinetic profile with its native statuses.
 
 ## Human tickets
 

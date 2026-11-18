@@ -124,6 +124,9 @@ class FakeOrbitTest(unittest.TestCase):
         def fake(anchor, args, stdin=None):
             if self.fail:
                 raise self.fail
+            if args[0] == "capabilities":
+                return {"contract": "1.0.0", "board": {"contract": "1.0.0", "compatible": True},
+                        "capabilities": sorted(orbit_store.REQUIRED_CAPABILITIES)}
             if args[0] == "list":
                 return {"tasks": self.tasks, "count": len(self.tasks)}
             if args[0] == "batch":
@@ -300,7 +303,7 @@ class CallTest(unittest.TestCase):
             with self.assertRaises(orbit_store.OrbitStoreError) as caught:
                 orbit_store.call("/board", ["list"])
         self.assertIn("install orbit", str(caught.exception))
-        self.assertIn("0.10.16", str(caught.exception))
+        self.assertIn("0.11.0", str(caught.exception))
 
     def test_depth_refusal_names_the_config_fix(self):
         bad = self.run_result({"ok": False, "error": {
@@ -314,63 +317,72 @@ class CallTest(unittest.TestCase):
                          "add max_subtask_depth = 2 under [board] in the Board's config.toml")
 
 
-class OrbitHealthDepthTest(unittest.TestCase):
-    """health() reports whether the Board's config allows nested SubTasks."""
-
-    DEPTH_FIX = "add max_subtask_depth = 2 under [board] in the Board's config.toml"
-
+class OrbitHandshakeTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        tmp_path = Path(tmp.name)
-        self.bin = tmp_path / "bin"
+        self.root = Path(tmp.name)
+        self.bin = self.root / "bin"
         self.bin.mkdir()
-        self.board = tmp_path / "repo"
-        (self.board / ".orbit" / "board").mkdir(parents=True)
-        self.config = self.board / ".orbit" / "board" / "config.toml"
-        self.settings = tmp_path / "settings.json"
+        self.settings = self.root / "settings.json"
         self.settings.write_text(json.dumps({"tracker": "orbit",
-                                             "tracker_settings": {"orbit_dir": str(self.board)}}))
+            "tracker_settings": {"orbit_dir": str(self.root)}}))
         patcher = mock.patch.dict(os.environ, {"PATH": str(self.bin)})
         patcher.start()
         self.addCleanup(patcher.stop)
-        orbit = self.bin / "orbit"
-        orbit.write_text("#!/bin/sh\n"
-                         'case "$*" in *"batch --help"*) exit 0;; '
-                         "*export*) echo '{\"ok\":true,\"data\":{\"schema_version\":3}}'; "
-                         "exit 0;; esac\n"
-                         "exit 1\n")
-        orbit.chmod(0o755)
+        self.capabilities = {"contract": "1.0.0", "board": {"contract": "1.0.0", "compatible": True},
+            "capabilities": ["workflow", "policy", "issue-types", "hierarchy", "links", "properties",
+                             "assignee", "lease", "batch", "idempotency", "profiles", "setup"],
+            "modules": [], "profiles": ["kinetic"],
+            "workflow": {"statuses": [{"name": name} for name in
+                ("todo", "running", "needs_decision", "blocked", "done_with_concerns", "merged",
+                 "done", "released", "in_review", "cancelled")]}}
 
-    def depth_row(self) -> dict:
-        rows = orbit_store.OrbitTicketStore({}).health(self.settings)
-        return {r["name"]: r for r in rows}["orbit-depth"]
+    def binary(self):
+        p = self.bin / "orbit"
+        p.write_text("#!/bin/sh\ncat <<'JSON'\n" + json.dumps({"ok": True, "data": self.capabilities}) + "\nJSON\n")
+        # PATH deliberately contains only the test binary.
+        p.write_text(p.read_text().replace("cat <<", "/bin/cat <<"))
+        p.chmod(0o755)
 
-    def test_missing_max_subtask_depth_fails_with_the_fix(self):
-        self.config.write_text('[board]\nnon_ready_labels = ["kinetic"]\n')
-        row = self.depth_row()
-        self.assertEqual(row["status"], "fail")
-        self.assertEqual(row["fix"], self.DEPTH_FIX)
+    def store(self):
+        return orbit_store.OrbitTicketStore({"anchor": str(self.root), "names": NAMES})
 
-    def test_depth_one_fails_with_the_fix(self):
-        self.config.write_text("[board]\nmax_subtask_depth = 1\n")
-        row = self.depth_row()
-        self.assertEqual(row["status"], "fail")
-        self.assertEqual(row["fix"], self.DEPTH_FIX)
+    def test_read_rejects_missing_capabilities_before_loading_tickets(self):
+        self.capabilities["capabilities"].remove("links")
+        self.capabilities["capabilities"].remove("lease")
+        self.binary()
+        with self.assertRaises(orbit_store.OrbitStoreError) as caught:
+            self.store().read(self.root, {"run_id": RUN, "run_dir": str(self.root)})
+        self.assertEqual(caught.exception.code, "MISSING_CAPABILITIES")
+        self.assertIn("lease, links", str(caught.exception))
 
-    def test_depth_two_or_more_passes(self):
-        for depth in (2, 3):
-            self.config.write_text(f"[board]\nmax_subtask_depth = {depth}\n")
-            self.assertEqual(self.depth_row()["status"], "pass", depth)
+    def test_read_rejects_incompatible_contract(self):
+        self.capabilities["contract"] = "2.0.0"
+        self.binary()
+        with self.assertRaises(orbit_store.OrbitStoreError) as caught:
+            self.store().read(self.root, {"run_id": RUN, "run_dir": str(self.root)})
+        self.assertEqual(caught.exception.code, "CONTRACT_VERSION_UNSUPPORTED")
 
-    def test_unreadable_config_warns(self):
-        self.config.write_text("[board]\nmax_subtask_depth = 2\n")
-        self.config.chmod(0o000)
-        self.addCleanup(self.config.chmod, 0o644)
-        self.assertEqual(self.depth_row()["status"], "warn")
+    def test_read_rejects_board_contract_the_binary_cannot_read(self):
+        self.capabilities["board"] = {"contract": "1.1.0", "compatible": False}
+        self.binary()
+        with self.assertRaises(orbit_store.OrbitStoreError) as caught:
+            self.store().read(self.root, {"run_id": RUN, "run_dir": str(self.root)})
+        self.assertEqual(caught.exception.code, "CONTRACT_VERSION_UNSUPPORTED")
 
-    def test_absent_config_warns(self):
-        self.assertEqual(self.depth_row()["status"], "warn")
+    def test_doctor_accepts_absent_optional_modules(self):
+        self.binary()
+        rows = self.store().health(self.settings)
+        self.assertTrue(rows)
+        self.assertTrue(all(row["status"] == "pass" for row in rows), rows)
+
+    def test_doctor_names_missing_native_profile(self):
+        self.capabilities["profiles"] = []
+        self.binary()
+        rows = {row["name"]: row for row in self.store().health(self.settings)}
+        self.assertEqual(rows["orbit-profile"]["status"], "fail")
+        self.assertIn("orbit setup", rows["orbit-profile"]["fix"])
 
 
 GIT_ENV = {"GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@example.com",
