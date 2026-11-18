@@ -6,7 +6,7 @@ The run's published tickets live on the Orbit Board. During decompose, follow th
 
 A run started from an existing user Issue never claims, moves or closes that Issue. It creates its own top-level spec epic and a non-blocking `relates-to` link to the user's Issue. The spec, slice and ticket use the native hierarchy: `epic` > `task` > `sub-task`. Parentage is separate from blocking links.
 
-After publication, later tickets (human work or review fixes) are created in the same batch as the state write; provisional IDs remain valid with `kinetic state` commands. Tool-specific metadata belongs in the `kinetic` Property. Native status, assignee, lease, parent and links remain authoritative for those fields.
+After publication, later tickets (human work or review fixes) are staged durably and published before the state write finishes. Idempotent batches recover interrupted publication; active statuses are applied after Orbit resolves the new Issue IDs. Provisional IDs remain valid with `kinetic state` commands. Tool-specific metadata belongs in the `kinetic` Property. Native status, assignee, lease, parent and links remain authoritative for those fields.
 
 ## Operations
 

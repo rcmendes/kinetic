@@ -573,7 +573,7 @@ class OrbitPublishTest(unittest.TestCase):
         tickets = state.load(self.run_dir)["tickets"]
         human_ids = [i for i, t in tickets.items() if t.get("kind") == "human"]
         self.assertEqual(len(human_ids), 1)
-        self.assertNotEqual(human_ids[0], human)  # it is a Task ID now
+        self.assertNotEqual(human_ids[0], human)  # it is an Issue ID now
         self.assertEqual(tickets[a]["blocked_by"][-1]["id"], human_ids[0])
         self.assertEqual(orbit_json(self.board, "show", a)["blocking"], [human_ids[0]])
         state.human_done(self.run_dir, human, note="done by hand")  # the provisional id still works
@@ -676,7 +676,7 @@ class OrbitSpecTreeTest(unittest.TestCase):
 
 @unittest.skipUnless(orbit_available(), SKIP_REASON)
 class OrbitSpecHealingTest(unittest.TestCase):
-    """The spec Task is rebuilt from the Board when the saved store config loses it."""
+    """The spec Issue is rebuilt from the Board when the saved store config loses it."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -727,7 +727,7 @@ class OrbitSpecHealingTest(unittest.TestCase):
 
 
 class OrbitSpecPublishTest(unittest.TestCase):
-    """The run's spec is one epic Task on the Board, rewritten by republishing."""
+    """The run's spec is one epic Issue on the Board, rewritten by republishing."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -775,7 +775,7 @@ class OrbitSpecPublishTest(unittest.TestCase):
 
 @unittest.skipUnless(orbit_available(), SKIP_REASON)
 class OrbitSpecSyncTest(unittest.TestCase):
-    """record_gate mirrors the spec lifecycle on the run's spec Task."""
+    """record_gate mirrors the spec lifecycle on the run's spec Issue."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -791,7 +791,7 @@ class OrbitSpecSyncTest(unittest.TestCase):
     def phase(self) -> str:
         return self.shown()["properties"]["kinetic"]["phase"]
 
-    def test_spec_gate_approved_clears_waiting_and_marks_approved(self):
+    def test_spec_gate_approved_moves_to_todo_and_marks_approved(self):
         state.record_gate(self.run_dir, "spec", True)
         shown = self.shown()
         self.assertNotEqual(shown["status"], "needs_decision")
@@ -824,7 +824,7 @@ class OrbitSpecSyncTest(unittest.TestCase):
     def test_last_ticket_keeps_spec_open_for_integration_review(self):
         stage_two(self.run_dir)
         state.record_gate(self.run_dir, "breakdown", True)
-        for tid in state.load(self.run_dir)["tickets"]:
+        for tid in graph.topo_order(state.load(self.run_dir)["tickets"]):
             state.set_ticket(self.run_dir, tid, status="running")
             finish_ticket(self.run_dir, tid)
         self.assertEqual(self.shown()["status"], "running")
@@ -841,7 +841,7 @@ class OrbitSpecSyncTest(unittest.TestCase):
 
 @unittest.skipUnless(orbit_available(), SKIP_REASON)
 class OrbitSpecEndToEndTest(unittest.TestCase):
-    """The whole run on a real Board: spec epic > slice Tasks > ticket Tasks."""
+    """The whole run on a real Board: spec epic > slice task > ticket sub-task."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -858,7 +858,7 @@ class OrbitSpecEndToEndTest(unittest.TestCase):
         self.assertNotEqual(shown["status"], "needs_decision")
         self.assertEqual(shown["properties"]["kinetic"]["phase"], "approved")
         stage_two(self.run_dir)
-        # Staged, not yet on the Board: only the spec Task exists.
+        # Staged, not yet on the Board: only the spec Issue exists.
         self.assertTrue((self.run_dir / ".kinetic" / "tickets.staged.json").exists())
         self.assertEqual(orbit_json(self.board, "list", "--include-closed")["count"], 1)
         state.record_gate(self.run_dir, "breakdown", True)  # publishes the staged tree

@@ -153,7 +153,7 @@ def _status_ops(tid: str, before: str, after: str, who: str) -> list:
     if before in DONE and not (before in ("done", "done_with_concerns")
                                and after in ("merged", "released")
                                or before == "merged" and after == "released"):
-        transition("reopen")
+        ops.append({"op": "reopen", "id": tid})
         before = "todo"
     if after == "running":
         if before in PAUSED:
@@ -552,7 +552,7 @@ class OrbitTicketStore:
         staged = self._staged(run_dir)
         run_id, names = st["run_id"], self._names(st)
         # After the first publish, a new ticket (a NEEDS_HUMAN ticket, a review fix)
-        # goes to the Board in this same Batch instead of waiting in the staged file.
+        # is staged durably, then published before the remaining state updates.
         published = bool(self.config.get("published"))
         aliases = st.get("ticket_aliases") or {}
         new, changes, staged_changed = {}, [], False
@@ -710,7 +710,7 @@ class OrbitTicketStore:
         self._batch(st, ops)
 
     def publish(self, run_dir, st: dict) -> dict:
-        """Send every staged ticket (and new slices) in one Batch; returns provisional -> Task ID."""
+        """Publish staged Issues, then apply active statuses using resolved identities."""
         self._resume_pending(st)
         staged = self._staged(run_dir)
         if not staged:
