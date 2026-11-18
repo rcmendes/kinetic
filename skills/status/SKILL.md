@@ -12,4 +12,5 @@ argument-hint: "[run-dir]"
 1. Pick the run directory: the argument if given, else the run of the current directory (`kinetic project current-run` prints its `run_dir`, or null). When that is null, `kinetic project runs` lists the project's open runs: use the only one, or, with several, list them and ask which. `kinetic project` exits 2 outside a project: say so and suggest `/kinetic:start`. Stop.
 2. With no run, say there is no open run and suggest `/kinetic:run <ref>`. Stop.
 3. Run `kinetic status --run <dir>` and print its output unchanged; that includes the ticket kind column and the "Waiting on you" line for human tickets.
+   For a quick look at a large run, `kinetic status --run <dir> --summary` prints only the lane, phase, progress counts and gates, and asks the ticket store for the counts instead of reading every ticket.
 4. If it fails, show the error and stop. Do not reconstruct state by hand.
