@@ -1,7 +1,7 @@
 # Orbit tracker smoke checklist
 
 Manual acceptance test for `tracker: orbit`. Run it once against a real Orbit
-Board with `orbit` 0.10.16 or later (Batches, Annotations and nested SubTasks),
+Board with `orbit` 0.11.0 or later (contract 1 and the kinetic profile),
 and record the date, `orbit --version`, and pass/fail per step at the bottom.
 
 ## Setup
@@ -12,8 +12,8 @@ and record the date, `orbit --version`, and pass/fail per step at the bottom.
    `max_subtask_depth = 2` under `[board]`.
 3. From the project folder: `kinetic project update --json '{"tracker": "orbit"}'`
    (add `tracker_settings.orbit_dir` if the Board is not at the project folder).
-4. `kinetic doctor`: `orbit-binary`, `orbit-board`, `orbit-schema`,
-   `orbit-depth` and `orbit-hold-label` all pass.
+4. `kinetic doctor`: `orbit-binary`, `orbit-board`, `orbit-contract`,
+   `orbit-capabilities` and `orbit-profile` all pass.
 
 ## Run
 
