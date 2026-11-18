@@ -119,7 +119,7 @@ class TraceOrbitRunTest(unittest.TestCase):
             for tid in ids[1:]:
                 self.assertIn(tid, out.stdout)
             # orbit tree on the spec Task shows the same three levels.
-            tree = orbit_json(board, "tree", spec_id)["tasks"]
+            tree = orbit_json(board, "tree", spec_id)["issues"]
             self.assertEqual({t["id"] for t in tree}, set(ids))
 
 
