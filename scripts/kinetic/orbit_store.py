@@ -551,18 +551,7 @@ class OrbitTicketStore:
             just = any((before.get(t) or {}).get("status") not in DONE for t in tids)
             if finished and just:
                 ops.append({"op": "done", "id": slice_id, "by": holder(st["run_id"])})
-        # Orbit refuses `done` on a Task with open SubTasks, so the spec closes
-        # only once every published slice's tickets are done. Decompose keeps
-        # every published slice non-empty (graph.validate refuses a slice no
-        # ticket references), so each one shows up in by_slice; an empty slice
-        # would make this check never pass.
-        if ops and all(
-                by_slice.get(sid)
-                and all(after[t].get("status") in DONE for t in by_slice[sid])
-                for sid in published):
-            spec_id = self._spec_id(st)
-            if spec_id:
-                ops.append({"op": "done", "id": spec_id, "by": holder(st["run_id"])})
+        # Integration review completes the spec; finishing slices alone is insufficient.
         return ops
 
     def spec_ops(self, run_dir, st: dict, title: str, body: str) -> list:
