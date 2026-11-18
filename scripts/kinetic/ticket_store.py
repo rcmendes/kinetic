@@ -19,7 +19,8 @@ LOCAL = {"kind": "local"}
 # what it did before the capability existed.
 #   review-states  record_verify, submit_review, record_review
 #   checkpoint     checkpoint, last_checkpoint
-CAPABILITIES = frozenset({"review-states", "checkpoint"})
+#   schedule-hints hints
+CAPABILITIES = frozenset({"review-states", "checkpoint", "schedule-hints"})
 
 
 class TicketStoreError(Exception):
@@ -79,6 +80,14 @@ class Checkpoints(TicketStore, Protocol):
 
     def last_checkpoint(self, run_dir, st: dict, ticket_id: str) -> dict | None:
         """The latest handoff ({"progress", "next", "blocker", "by", "at"}) or None."""
+
+
+class ScheduleHints(TicketStore, Protocol):
+    """The `schedule-hints` capability: the store may suggest an order for ready tickets."""
+
+    def hints(self, run_dir, st: dict, ready_ids: list) -> list:
+        """`ready_ids` in the order the store prefers. A hint only reorders: kinetic
+        ignores any id it did not offer and keeps the ones left out, in its own order."""
 
 
 class LocalTicketStore:
