@@ -783,12 +783,14 @@ class OrbitHealthTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def orbit(self, schema=3, batch=0):
+    def orbit(self, contract="1.0.0", profiles=None):
+        from kinetic import orbit_store
+        data = {"contract": contract, "board": {"contract": contract, "compatible": True},
+                "capabilities": sorted(orbit_store.REQUIRED_CAPABILITIES),
+                "profiles": ["kinetic"] if profiles is None else profiles,
+                "workflow": {"statuses": [{"name": name} for name in orbit_store.NATIVE_STATUSES]}}
         p = self.bin / "orbit"
-        p.write_text("#!/bin/sh\n"
-                     f'case "$*" in *"batch --help"*) exit {batch};; '
-                     f'*export*) echo \'{{"ok":true,"data":{{"schema_version":{schema}}}}}\'; exit 0;; esac\n'
-                     "exit 1\n")
+        p.write_text("#!/bin/sh\n/bin/cat <<'JSON'\n" + json.dumps({"ok": True, "data": data}) + "\nJSON\n")
         p.chmod(0o755)
 
     def rows(self, settings=None):
@@ -797,21 +799,19 @@ class OrbitHealthTest(unittest.TestCase):
     def test_orbit_tracker_adds_store_health(self):
         self.orbit()
         rows = self.rows()
-        for name in ("orbit-binary", "orbit-schema", "orbit-board", "orbit-hold-label"):
+        for name in ("orbit-binary", "orbit-contract", "orbit-board", "orbit-capabilities", "orbit-profile"):
             self.assertEqual(rows[name]["status"], "pass", (name, rows[name]))
 
     def test_orbit_rows_name_the_fix(self):
         rows = self.rows()
         self.assertEqual(rows["orbit-binary"]["status"], "fail")
         self.assertIn("install orbit", rows["orbit-binary"]["fix"])
-        self.orbit(schema=2)
-        self.assertEqual(self.rows()["orbit-schema"]["fix"],
-                         "orbit export schema_version is 2, kinetic needs 3")
-        self.orbit()
-        self.config.write_text('[board]\nnon_ready_labels = ["needs-triage"]\n')
-        hold = self.rows()["orbit-hold-label"]
-        self.assertEqual(hold["status"], "warn")
-        self.assertIn('add "kinetic" to non_ready_labels', hold["fix"])
+        self.orbit(contract="2.0.0")
+        self.assertIn("kinetic needs Orbit contract 1", self.rows()["orbit-contract"]["fix"])
+        self.orbit(profiles=[])
+        profile = self.rows()["orbit-profile"]
+        self.assertEqual(profile["status"], "fail")
+        self.assertIn("orbit setup kinetic", profile["fix"])
 
     def test_local_tracker_adds_no_store_rows(self):
         local = self.tmp / "local.json"
