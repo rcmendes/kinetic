@@ -45,3 +45,11 @@ and record the date, `orbit --version`, and pass/fail per step at the bottom.
 
 | Date | `orbit --version` | Steps passed | Notes |
 |---|---|---|---|
+
+Native Orbit reads keep a disposable `.kinetic/orbit-feed.json` snapshot per run.
+Status and board resume `orbit changes --since` and fetch only changed Issues;
+removing the snapshot rebuilds it from the Board. A rewritten Board history also
+rebuilds the snapshot. Writes use a per-run `.kinetic/orbit-write.json` journal,
+per-operation version guards and a stable idempotency key. Retry an interrupted
+operation before starting a different write; keep the journal until it succeeds.
+Version conflicts refresh guards and retry at most three times.
