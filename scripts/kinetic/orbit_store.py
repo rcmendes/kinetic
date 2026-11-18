@@ -120,6 +120,24 @@ def derive(ticket: dict, run_id: str, names: dict) -> dict:
     return {"status": ticket.get("status", "todo"), "labels": labels}
 
 
+def _component(name) -> str | None:
+    """A lowercase slug Orbit accepts as a Component (letters, digits, `-`, at most 32)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", str(name or "").lower()).strip("-")[:32].strip("-")
+    return slug or None
+
+
+def _repository(name) -> str | None:
+    """The repository name if Orbit would accept it as a Repository, else None."""
+    return name if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", name) else None
+
+
+def _placement(repo, slice_title=None) -> dict:
+    """Orbit's native repository and component fields; a name Orbit would refuse is omitted,
+    because one bad name fails the whole batch."""
+    fields = {"repository": _repository(repo), "component": _component(slice_title)}
+    return {k: v for k, v in fields.items() if v}
+
+
 def _links(ticket: dict, run_id: str) -> dict:
     links = {}
     for edge in ticket.get("blocked_by", []):
@@ -494,7 +512,7 @@ class OrbitTicketStore:
     # -- staged tickets --
     def capabilities(self) -> frozenset:
         return frozenset({"review-states", "checkpoint", "schedule-hints",
-                          "query", "idempotent-write"})
+                          "query", "idempotent-write", "placement"})
 
     def rollup(self, run_dir, st: dict) -> dict:
         """Ticket counts from one `digest` of the spec; slices are subtracted from its subtree."""
@@ -678,6 +696,7 @@ class OrbitTicketStore:
                    "title": ticket_text(run_dir, slice_id)[0],
                    "type": "task",
                    "labels": [run_label(run_id, names)],
+                   **_placement(None, ticket_text(run_dir, slice_id)[0]),
                    "properties": {ANNOTATION_OWNER: {"role": "slice"}}}
             if spec_id:
                 add["parent"] = spec_id
@@ -695,6 +714,9 @@ class OrbitTicketStore:
             add = {"op": "add", "key": source_key(run_id, pid), "title": title, "body": body,
                    "type": "sub-task" if t.get("slice") else "task",
                    "labels": sorted(derive(t, run_id, names)["labels"]),
+                   # A slice published earlier has no title here, so only its tickets' repository is set.
+                   **_placement(t.get("repo"), ticket_text(run_dir, t["slice"])[0]
+                                if t.get("slice") in new_slices else None),
                    "properties": {ANNOTATION_OWNER: _property_fields(t)}}
             if t.get("slice"):
                 add["parent"] = ref(t["slice"])
