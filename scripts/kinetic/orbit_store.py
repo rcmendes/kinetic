@@ -675,7 +675,8 @@ class OrbitTicketStore:
             ops.append({"op": "transition", "id": spec_id, "name": "answer", "by": holder(st["run_id"])})
             current = "todo"
         if event == "building" and current == "todo":
-            ops.append({"op": "claim", "id": spec_id, "by": holder(st["run_id"])})
+            ops.append({"op": "transition", "id": spec_id, "name": "claim",
+                        "by": holder(st["run_id"])})
         ops.append({"op": "property", "id": spec_id, "owner": ANNOTATION_OWNER,
                     "value": {"role": "spec", "run": st["run_id"], "phase": phase}})
         self._batch(st, ops)
