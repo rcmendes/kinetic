@@ -35,6 +35,25 @@ def topo_order(tickets: dict) -> list:
     return order
 
 
+def priorities(tickets: dict) -> dict:
+    """Rank 0 (highest) to 3 for each ticket by how much work waits behind it: the length of
+    the longest chain of tickets that depend on it, counted from the longest chain in the run.
+    Edges to unknown ids are ignored; a dependency cycle gives no ranks."""
+    try:
+        order = topo_order(tickets)
+    except ValueError:
+        return {}
+    dependents = {i: [] for i in tickets}
+    for i, t in tickets.items():
+        for b in {e["id"] for e in t["blocked_by"] if e["id"] in tickets}:
+            dependents[b].append(i)
+    depth = {}
+    for i in reversed(order):
+        depth[i] = 1 + max((depth[d] for d in dependents[i]), default=0)
+    longest = max(depth.values(), default=0)
+    return {i: min(3, longest - d) for i, d in depth.items()}
+
+
 def _upstream(tickets: dict, tid: str) -> set:
     """Every ticket tid is blocked by, directly or transitively."""
     seen, stack = set(), [tid]

@@ -138,6 +138,28 @@ def _placement(repo, slice_title=None) -> dict:
     return {k: v for k, v in fields.items() if v}
 
 
+def _board_priorities(anchor) -> list | None:
+    """The Board's ordered priority names, read from its config.toml, or None if not found.
+    Orbit refuses a name outside this list, and one refusal fails the whole batch."""
+    for path in (Path(anchor) / ".orbit" / "board" / "config.toml", Path(anchor) / "config.toml"):
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        found = re.search(r"^priorities\s*=\s*\[([^\]]*)\]", text, re.M)
+        if found:
+            names = re.findall(r"\"([^\"]+)\"|'([^']+)'", found.group(1))
+            return [a or b for a, b in names] or None
+    return None
+
+
+def _priority_name(rank: int, names) -> str | None:
+    """Kinetic's rank 0-3 spread over the Board's names, most important first."""
+    if not names:
+        return None
+    return names[round(rank * (len(names) - 1) / 3)]
+
+
 def _links(ticket: dict, run_id: str) -> dict:
     links = {}
     for edge in ticket.get("blocked_by", []):
@@ -691,6 +713,8 @@ class OrbitTicketStore:
         ref = self._ref(run_id, set(tickets) | set(new_slices), aliases)
         spec_id = self._spec_id(st) if new_slices else None
         ops = []
+        ranks = graph.priorities(tickets)
+        board_names = _board_priorities(self._anchor(st))
         for slice_id in new_slices:
             add = {"op": "add", "key": source_key(run_id, slice_id),
                    "title": ticket_text(run_dir, slice_id)[0],
@@ -713,6 +737,8 @@ class OrbitTicketStore:
             title, body = ticket_text(run_dir, pid)
             add = {"op": "add", "key": source_key(run_id, pid), "title": title, "body": body,
                    "type": "sub-task" if t.get("slice") else "task",
+                   **({"priority": _priority_name(ranks[pid], board_names)}
+                      if pid in ranks and board_names else {}),
                    "labels": sorted(derive(t, run_id, names)["labels"]),
                    # A slice published earlier has no title here, so only its tickets' repository is set.
                    **_placement(t.get("repo"), ticket_text(run_dir, t["slice"])[0]

@@ -161,3 +161,31 @@ class RunReposTest(unittest.TestCase):
                 code = graph.main(["validate", "--run", str(run)])
             self.assertEqual(code, 1)
             self.assertIn("not in the run", buf.getvalue())
+
+
+class PriorityTest(unittest.TestCase):
+    def test_a_chain_ranks_by_how_much_work_waits_behind_a_ticket(self):
+        tickets = {"A": t(), "B": t(blocked_by=[("A", "merge")]), "C": t(blocked_by=[("B", "merge")])}
+        self.assertEqual(graph.priorities(tickets), {"A": 0, "B": 1, "C": 2})
+
+    def test_independent_tickets_are_all_top_priority(self):
+        self.assertEqual(graph.priorities({"A": t(), "B": t()}), {"A": 0, "B": 0})
+
+    def test_a_ticket_on_a_shorter_branch_ranks_lower_than_the_critical_path(self):
+        tickets = {"A": t(), "B": t(blocked_by=[("A", "merge")]), "C": t(blocked_by=[("B", "merge")]),
+                   "D": t(blocked_by=[("A", "snapshot")])}
+        ranks = graph.priorities(tickets)
+        self.assertEqual((ranks["A"], ranks["B"], ranks["D"]), (0, 1, 2))
+
+    def test_the_rank_stops_at_three(self):
+        tickets = {"T0": t()}
+        for i in range(1, 6):
+            tickets[f"T{i}"] = t(blocked_by=[(f"T{i-1}", "merge")])
+        self.assertEqual([graph.priorities(tickets)[f"T{i}"] for i in range(6)], [0, 1, 2, 3, 3, 3])
+
+    def test_a_cycle_gives_no_priorities(self):
+        tickets = {"A": t(blocked_by=[("B", "merge")]), "B": t(blocked_by=[("A", "merge")])}
+        self.assertEqual(graph.priorities(tickets), {})
+
+    def test_edges_to_unknown_tickets_are_ignored(self):
+        self.assertEqual(graph.priorities({"A": t(blocked_by=[("gone", "merge")])}), {"A": 0})

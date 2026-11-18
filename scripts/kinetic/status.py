@@ -3,16 +3,18 @@ from __future__ import annotations
 import argparse
 import sys
 
-from kinetic import frontier, state, ticket_store
+from kinetic import frontier, graph, state, ticket_store
 
 
 def render(st: dict) -> str:
     out = [f"Lane: {st['lane']} | Phase: {st['phase']}", "",
            "Waiting on you: " + (", ".join(frontier.waiting_on_you(st)) or "none"), "",
-           "| id | kind | repo | status | blocked by |", "| --- | --- | --- | --- | --- |"]
+           "| id | kind | repo | status | priority | blocked by |", "| --- | --- | --- | --- | --- | --- |"]
+    ranks = graph.priorities(st["tickets"])
     for i, t in sorted(st["tickets"].items()):
         blockers = ", ".join(f"{e['id']} ({e['type']})" for e in t["blocked_by"]) or "—"
-        out.append(f"| {i} | {state.field(t, 'kind')} | {t.get('repo') or '—'} | {t['status']} | {blockers} |")
+        out.append(f"| {i} | {state.field(t, 'kind')} | {t.get('repo') or '—'} | {t['status']} | "
+                   f"{'P%d' % ranks[i] if i in ranks else '—'} | {blockers} |")
     stuck = sorted(i for i, t in st["tickets"].items() if t.get("liveness") == "stuck")
     if stuck:
         out += ["", "implementer may be stuck: " + ", ".join(stuck)]

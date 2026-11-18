@@ -891,3 +891,24 @@ class PlacementNamesTest(unittest.TestCase):
         self.assertEqual(orbit_store._repository("my-repo.v2"), "my-repo.v2")
         for bad in ("", ".hidden", "-x", "my repo!", "a" * 65, None):
             self.assertIsNone(orbit_store._repository(bad), bad)
+
+
+class PriorityNamesTest(unittest.TestCase):
+    """A rank is mapped onto the Board's own ordered priority names."""
+
+    def test_the_board_names_are_read_from_its_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            board = Path(tmp) / ".orbit" / "board"
+            board.mkdir(parents=True)
+            (board / "config.toml").write_text('[board]\npriorities = [\n    "urgent",\n    "normal",\n]\n')
+            self.assertEqual(orbit_store._board_priorities(tmp), ["urgent", "normal"])
+
+    def test_no_config_means_no_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(orbit_store._board_priorities(tmp))
+
+    def test_a_rank_maps_across_the_names(self):
+        names = ["highest", "high", "medium", "low"]
+        self.assertEqual([orbit_store._priority_name(r, names) for r in range(4)], names)
+        self.assertEqual([orbit_store._priority_name(r, ["a", "b"]) for r in range(4)], ["a", "a", "b", "b"])
+        self.assertIsNone(orbit_store._priority_name(1, None))
