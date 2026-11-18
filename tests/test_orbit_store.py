@@ -166,7 +166,7 @@ class FakeOrbitTest(unittest.TestCase):
     def publish_one(self, tid="orb-a.b", **fields):
         self.tasks.append(task_json(tid, ticket(repo="api", **fields)))
 
-    def test_read_maps_annotation_to_ticket(self):
+    def test_read_maps_native_property_to_ticket(self):
         self.publish_one(status="running", worktree="/wt")
         t = state.load(self.run_dir)["tickets"]["orb-a.b"]
         self.assertEqual((t["status"], t["repo"], t["worktree"]), ("running", "api", "/wt"))
@@ -311,16 +311,6 @@ class CallTest(unittest.TestCase):
         self.assertIn("install orbit", str(caught.exception))
         self.assertIn("0.11.0", str(caught.exception))
 
-    def test_depth_refusal_names_the_config_fix(self):
-        bad = self.run_result({"ok": False, "error": {
-            "code": "INVALID_ARGUMENT",
-            "message": "SubTasks are one level deep by default; "
-                       "raise board.max_subtask_depth to nest further"}}, 1)
-        with mock.patch.object(orbit_store.subprocess, "run", return_value=bad):
-            with self.assertRaises(orbit_store.OrbitStoreError) as caught:
-                orbit_store.call("/board", ["batch", "--file", "-"])
-        self.assertEqual(caught.exception.fix,
-                         "add max_subtask_depth = 2 under [board] in the Board's config.toml")
 
 
 class OrbitHandshakeTest(unittest.TestCase):
@@ -461,13 +451,13 @@ class OrbitPublishTest(unittest.TestCase):
         self.run_dir, self.board = make_orbit_run(Path(self._tmp.name))
         stage_two(self.run_dir)
 
-    def test_publish_annotates_slice_with_spec_only_when_recorded(self):
+    def test_publish_records_slice_property_with_spec_when_recorded(self):
         state.set_spec(self.run_dir, "spec.md")
         core = state.publish_tickets(self.run_dir)["01-core"]
         self.assertEqual(orbit_json(self.board, "show", core)["properties"]["kinetic"],
                          {"role": "slice", "spec": "spec.md"})
 
-    def test_publish_without_spec_adds_no_slice_annotation(self):
+    def test_publish_without_spec_records_slice_role(self):
         core = state.publish_tickets(self.run_dir)["01-core"]
         self.assertEqual(orbit_json(self.board, "show", core)["properties"]["kinetic"],
                          {"role": "slice"})
@@ -503,7 +493,7 @@ class OrbitPublishTest(unittest.TestCase):
         self.assertEqual(orbit_json(self.board, "list", "--include-closed")["count"], 3)
         self.assertEqual(set(state.load(self.run_dir)["tickets"]), {first["01-api-a"], first["02-web-b"]})
 
-    def test_dispatch_claims_and_unholds(self):
+    def test_dispatch_claims_with_native_implementer_identity(self):
         a = state.publish_tickets(self.run_dir)["01-api-a"]
         state.set_ticket(self.run_dir, a, status="running", worktree="/wt/a")
         shown = orbit_json(self.board, "show", a)
@@ -629,7 +619,7 @@ class OrbitPublishTest(unittest.TestCase):
 
 @unittest.skipUnless(orbit_available(), SKIP_REASON)
 class OrbitSpecTreeTest(unittest.TestCase):
-    """New-shape run on a depth-2 Board: spec epic > slice Tasks > ticket Tasks."""
+    """Native hierarchy: spec epic > slice task > ticket sub-task."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -663,7 +653,7 @@ class OrbitSpecTreeTest(unittest.TestCase):
         self.assertEqual(set(tickets), {self.a, self.b})
         self.assertEqual(tickets[self.a]["slice"], self.core)
 
-    def test_last_ticket_closes_the_slice_then_the_spec(self):
+    def test_last_ticket_closes_slice_and_keeps_spec_open_for_review(self):
         state.set_ticket(self.run_dir, self.a, status="running")
         finish_ticket(self.run_dir, self.a)
         self.assertEqual(orbit_json(self.board, "show", self.core)["status"], "todo")
@@ -673,13 +663,13 @@ class OrbitSpecTreeTest(unittest.TestCase):
         self.assertEqual(orbit_json(self.board, "show", self.core)["status"], "done")
         self.assertEqual(orbit_json(self.board, "show", self.spec_id)["status"], "needs_decision")
 
-    def test_reopening_a_done_ticket_reopens_slice_and_spec(self):
+    def test_reopening_done_ticket_reopens_slice_and_preserves_spec(self):
         for tid in (self.a, self.b):
             state.set_ticket(self.run_dir, tid, status="running")
             finish_ticket(self.run_dir, tid)
         self.assertEqual(orbit_json(self.board, "show", self.spec_id)["status"], "needs_decision")
         state.set_ticket(self.run_dir, self.b, status="running")
-        self.assertEqual(orbit_json(self.board, "show", self.b)["status"], "in_progress")
+        self.assertEqual(orbit_json(self.board, "show", self.b)["status"], "running")
         self.assertNotEqual(orbit_json(self.board, "show", self.core)["status"], "done")
         self.assertNotEqual(orbit_json(self.board, "show", self.spec_id)["status"], "done")
 
@@ -715,13 +705,13 @@ class OrbitSpecHealingTest(unittest.TestCase):
         self.assertEqual(shown["parent"], self.spec_id)
         self.assertNotEqual(shown["type"], "epic")
 
-    def test_closing_the_last_slice_after_losing_spec_task_closes_the_spec(self):
+    def test_closing_last_slice_after_losing_spec_id_keeps_spec_open(self):
         mapping = state.publish_tickets(self.run_dir)
         self._lose_spec_task()
         self._finish(mapping["01-api-a"], mapping["02-web-b"])
         self.assertEqual(orbit_json(self.board, "show", self.spec_id)["status"], "needs_decision")
 
-    def test_read_closes_a_spec_whose_slices_all_closed_earlier(self):
+    def test_read_keeps_spec_open_when_all_slices_closed(self):
         mapping = state.publish_tickets(self.run_dir)
         self._finish(mapping["01-api-a"], mapping["02-web-b"])
         
@@ -831,7 +821,7 @@ class OrbitSpecSyncTest(unittest.TestCase):
         self.assertNotEqual(shown["status"], "needs_decision")
         self.assertEqual(self.phase(), "building")
 
-    def test_the_last_ticket_closes_the_spec_task(self):
+    def test_last_ticket_keeps_spec_open_for_integration_review(self):
         stage_two(self.run_dir)
         state.record_gate(self.run_dir, "breakdown", True)
         for tid in state.load(self.run_dir)["tickets"]:
