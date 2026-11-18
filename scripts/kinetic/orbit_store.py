@@ -534,7 +534,7 @@ class OrbitTicketStore:
     # -- staged tickets --
     def capabilities(self) -> frozenset:
         return frozenset({"review-states", "checkpoint", "schedule-hints",
-                          "query", "idempotent-write", "placement"})
+                          "query", "idempotent-write", "placement", "priority"})
 
     def rollup(self, run_dir, st: dict) -> dict:
         """Ticket counts from one `digest` of the spec; slices are subtracted from its subtree."""
