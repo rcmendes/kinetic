@@ -387,7 +387,9 @@ def record_verify(run_dir, ticket_id, exit_code: int, log_path: str, repo_name=N
         if command is not None:
             s["verify"][key]["command"] = command
         if ticket_id is not None:
-            ticket_store.for_state(s).record_verify(run_dir, s, canonical, s["verify"][key])
+            store = ticket_store.for_state(s)
+            if ticket_store.has(store, "review-states"):
+                store.record_verify(run_dir, s, canonical, s["verify"][key])
     _mutate(run_dir, fn)
 
 
@@ -416,7 +418,9 @@ def submit_review(run_dir, ticket_id: str, scope: str = "ticket") -> dict:
             if refusal:
                 raise ValueError(refusal)
             evidence = [st["verify"][tid]]
-        ticket_store.for_state(st).submit_review(run_dir, st, tid, evidence, scope)
+        store = ticket_store.for_state(st)
+        if ticket_store.has(store, "review-states"):
+            store.submit_review(run_dir, st, tid, evidence, scope)
         save(run_dir, st)
         return {"id": tid, "scope": scope}
 
@@ -431,7 +435,9 @@ def record_review(run_dir, ticket_id: str, axis: str, verdict: str, reason: str 
         tid = _alias(st, ticket_id)
         if (axis == "integration" and tid != st.get("spec")) or (axis != "integration" and tid not in st["tickets"]):
             raise ValueError("review must target the run's owned spec or ticket")
-        ticket_store.for_state(st).record_review(run_dir, st, tid, axis, verdict, reason)
+        store = ticket_store.for_state(st)
+        if ticket_store.has(store, "review-states"):
+            store.record_review(run_dir, st, tid, axis, verdict, reason)
         save(run_dir, st)
         return {"id": tid, "axis": axis, "verdict": verdict}
 
