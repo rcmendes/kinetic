@@ -175,7 +175,7 @@ class LocalTicketStore:
         return None
 
     def capabilities(self) -> frozenset:
-        return frozenset({"query", "human-question"})
+        return frozenset({"query", "human-question", "external-ref"})
 
     # The ask/answer machine, kept in state.json: state.save persists it.
     def ask(self, run_dir, st: dict, ticket_id: str, question: str) -> None:

@@ -106,6 +106,11 @@ class StoreContract:
         or None if the store cannot show that; the priority section is skipped without it."""
         return None
 
+    def native_refs(self, ticket_id):
+        """The ticket's references as the store holds them natively, a list of (system, id),
+        or None if the store cannot show that; that part of the section is skipped without it."""
+        return None
+
     def need(self, capability):
         if not ticket_store.has(self.store(), capability):
             self.skipTest(f"store does not declare {capability}")
@@ -196,6 +201,22 @@ class StoreContract:
             self.skipTest("store gives no native view of priority")
         self.assertLess(first, waits)  # a blocks b, so a ranks higher
 
+    def test_external_refs_round_trip_and_can_be_removed(self):
+        self.need("external-ref")
+        refs = [{"system": "jira", "id": "PROJ-1", "url": "https://example.test/PROJ-1"},
+                {"system": "linear", "id": "ENG-7"}]
+        state.set_ticket(self.run_dir, self.a, refs=refs)
+        got = self.tickets()[self.a]["refs"]
+        self.assertEqual([(r["system"], r["id"]) for r in got], [("jira", "PROJ-1"), ("linear", "ENG-7")])
+        self.assertEqual(got[0]["url"], "https://example.test/PROJ-1")
+        native = self.native_refs(self.a)
+        if native is not None:
+            self.assertEqual(sorted(native), [("jira", "PROJ-1"), ("linear", "ENG-7")])
+        state.set_ticket(self.run_dir, self.a, refs=[])
+        self.assertEqual(self.tickets()[self.a]["refs"], [])
+        if native is not None:
+            self.assertEqual(self.native_refs(self.a), [])
+
     def test_a_question_parks_the_ticket_and_an_answer_returns_it(self):
         self.need("human-question")
         state.set_ticket(self.run_dir, self.a, status="running")
@@ -251,6 +272,20 @@ class OrbitStoreContract(StoreContract, unittest.TestCase):
                               cwd=self.anchor, capture_output=True, text=True)
         issue = json.loads(done.stdout)["data"]
         return issue.get("repository"), issue.get("component")
+
+    def native_refs(self, ticket_id):
+        done = subprocess.run(["orbit", "--dir", str(self.anchor), "show", ticket_id, "--json"],
+                              cwd=self.anchor, capture_output=True, text=True)
+        links = json.loads(done.stdout)["data"]["links"]
+        return [(l["target"]["system"], l["target"]["id"]) for l in links
+                if isinstance(l["target"], dict) and l["type"] == "relates-to"]
+
+    def test_the_spec_carries_the_run_as_its_external_id(self):
+        done = subprocess.run(["orbit", "--dir", str(self.anchor), "list", "--include-closed", "--json"],
+                              cwd=self.anchor, capture_output=True, text=True)
+        specs = [i for i in json.loads(done.stdout)["data"]["issues"] if i["type"] == "epic"]
+        run_id = state.load(self.run_dir, tickets=False)["run_id"]
+        self.assertEqual([i["external_id"] for i in specs], [f"kinetic:{run_id}"])
 
     def native_priority(self, ticket_id):
         done = subprocess.run(["orbit", "--dir", str(self.anchor), "show", ticket_id, "--json"],

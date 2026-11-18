@@ -279,7 +279,7 @@ def ticket_defaults() -> dict:
         "repo": None, "slice": None, "status": "todo", "blocked_by": [],
         "branch": None, "report": None, "snapshot_published": False,
         "kind": "agent", "after": [], "ships_with": None, "related": [],
-        "human_note": None, "done_by": None,
+        "human_note": None, "done_by": None, "refs": [],
     }
 
 
@@ -297,6 +297,13 @@ def _check_fields(fields: dict) -> None:
     if "touches" in fields and not (isinstance(fields["touches"], list)
                                     and all(isinstance(x, str) and x.strip() for x in fields["touches"])):
         raise ValueError("touches must be a list of non-empty path strings")
+    if "refs" in fields:
+        refs = fields["refs"]
+        if not (isinstance(refs, list) and all(
+                isinstance(r, dict) and isinstance(r.get("system"), str) and r["system"].strip()
+                and " " not in r["system"] and isinstance(r.get("id"), str) and r["id"].strip()
+                and (r.get("url") is None or isinstance(r["url"], str)) for r in refs)):
+            raise ValueError("refs must be a list of {system, id, url?} with a system name without spaces")
     if fields.get("ships_with") is not None and not isinstance(fields["ships_with"], str):
         raise ValueError("ships_with must be a string or null")
 

@@ -108,7 +108,8 @@ def _fields(t: dict) -> dict:
 
 
 def _property_fields(t: dict) -> dict:
-    native = {"status", "slice", "assignee", "blocked_by", "after", "related", "ships_with", "touches"}
+    native = {"status", "slice", "assignee", "blocked_by", "after", "related", "ships_with", "touches",
+              "refs"}
     return {k: v for k, v in _fields(t).items() if k not in native}
 
 
@@ -168,6 +169,11 @@ def _links(ticket: dict, run_id: str) -> dict:
     for field, kind in (("after", "after"), ("related", "relates-to")):
         for target in ticket.get(field, []):
             links[(kind, "to", target)] = {"blocking": False, "attributes": {}}
+    for ref in ticket.get("refs") or []:
+        value = {"blocking": False, "attributes": {}}
+        if ref.get("url"):
+            value["url"] = ref["url"]
+        links[("relates-to", "external", f"{ref['system']}:{ref['id']}")] = value
     group = ticket.get("ships_with")
     if group:
         links[("ships-with", "external", f"kinetic:{run_id}:ship:{group}")] = {
@@ -336,7 +342,7 @@ def to_ticket(task: dict) -> dict:
                         for p in touches.get("paths", [])]
     if task.get("assignee"):
         t["assignee"] = task["assignee"]
-    t.update(blocked_by=[], after=[], related=[], ships_with=None)
+    t.update(blocked_by=[], after=[], related=[], ships_with=None, refs=[])
     for link in task.get("links", []):
         kind, target = link["type"], link["target"]
         attributes = link.get("attributes") or {}
@@ -344,6 +350,11 @@ def to_ticket(task: dict) -> dict:
             t["blocked_by"].append({"id": target, "type": attributes.get("edge", "merge")})
         elif kind in ("after", "relates-to") and isinstance(target, str):
             t["after" if kind == "after" else "related"].append(target)
+        elif kind == "relates-to" and isinstance(target, dict) and target.get("system"):
+            ref = {"system": target["system"], "id": target["id"]}
+            if target.get("url"):
+                ref["url"] = target["url"]
+            t["refs"].append(ref)
         elif kind == "ships-with":
             t["ships_with"] = attributes.get("group")
     if t["status"] == "running":
@@ -535,7 +546,7 @@ class OrbitTicketStore:
     def capabilities(self) -> frozenset:
         return frozenset({"review-states", "checkpoint", "schedule-hints",
                           "query", "idempotent-write", "placement", "priority",
-                          "human-question"})
+                          "human-question", "external-ref"})
 
     def ask(self, run_dir, st: dict, ticket_id: str, question: str) -> None:
         self._resume_pending(st)
@@ -808,7 +819,8 @@ class OrbitTicketStore:
         value = {"role": "spec", "run": run_id, "phase": "awaiting-approval"}
         text = f"{SPEC_GENERATED}\n\n{body}"
         ops = [{"op": "add", "key": key, "title": title, "type": "epic",
-                "labels": labels, "body": text, "properties": {ANNOTATION_OWNER: value}},
+                "labels": labels, "body": text, "external_id": f"kinetic:{run_id}",
+                "properties": {ANNOTATION_OWNER: value}},
                {"op": "update", "id": ref, "title": title, "body": text},
                {"op": "property", "id": ref, "owner": ANNOTATION_OWNER, "value": value}]
         current = call(self._anchor(st), ["show", existing])["status"] if existing else "todo"
