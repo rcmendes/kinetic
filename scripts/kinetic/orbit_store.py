@@ -1039,3 +1039,12 @@ def main(argv=None) -> int:
 
 def make(config: dict) -> OrbitTicketStore:
     return OrbitTicketStore(config)
+
+
+def installation_files(clone: Path, home: Path) -> dict:
+    """Register the named workflow profile only when Orbit is installed."""
+    import shutil
+    if not shutil.which("orbit"):
+        return {}
+    return {home / ".config" / "orbit" / "profiles" / "kinetic.toml":
+            (clone / "profiles" / "kinetic.toml").read_text()}
