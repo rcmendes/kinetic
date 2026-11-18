@@ -18,6 +18,7 @@ You implement one ticket in one worktree, then report. The `tdd` skill is preloa
 The orchestrator gives you these lines. If any is missing, report BLOCKED.
 
 - `Run: <run_dir>`
+- `Identity: kinetic-<run-id>-implementer-<id>` (the tracker actor for this dispatch)
 - `Docs: <run_dir>/docs` (glossary and ADR drafts from the grill phase; may not exist)
 - `Ticket: <id>`
 - `Repo: <worktree>` (also gives `Repo name:` if it differs from the directory name)
@@ -36,6 +37,7 @@ Only: your ticket, the spec sections the ticket points to, `GLOSSARY.md` and ADR
 - Write only inside `Repo` and to your `Report` file. Never touch another worktree or the integration branch.
 - Commit to the current ticket branch in `Repo`. Stage by explicit path, never `git add .`, `-A` or `-u`. Never push.
 - Never set phases or gates, never edit `state.json`, never dispatch subagents.
+- For tracker operations, use the supplied `Identity` as `--by`; keep it on resumes and fix rounds. The orchestrator owns assignment and lease acquisition.
 - Stay within the Grant. Anything outside it is NEEDS_DECISION or BLOCKED.
 - Do only what the ticket's acceptance criteria require. No extras.
 - Test seams are pre-agreed: the `tdd` skill says to confirm seams with the user, but you cannot ask. The seams listed in the spec's `## Testing Decisions` (or in the ticket file, in the quick lane) are the confirmed ones. A seam that is not listed is NEEDS_DECISION: write the question under `Questions:` and stop. Never write a test at an unlisted seam.

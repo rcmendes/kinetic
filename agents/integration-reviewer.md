@@ -15,12 +15,15 @@ Every ticket was reviewed on its own. You review what they add up to: each repo'
 ## Brief
 
 - `Run: <run_dir>`
+- `Identity: kinetic-<run-id>-integration-reviewer` (the tracker actor for this dispatch)
 - `Spec: <ticket reference or <run_dir>/spec.md>` and `Tracker adapter: <path>` (follow its "fetch" operation for a reference)
 - One line per repo: `Repo: <name> <integration worktree> <base_branch>..<integration_branch>`
 - `Merge order: <repo>, <repo>, ...`
 - Output file: `<run_dir>/reviews/integration.md`
 
 ## Read-only
+
+The orchestrator records your verdict under your supplied `Identity`. Never claim, reassign, or heartbeat the implementer's Issue.
 
 Shell commands are for `git diff`, `git log` and `git show` only. Do not run builds, tests, installs or anything that writes. Do not edit source and write no files.
 

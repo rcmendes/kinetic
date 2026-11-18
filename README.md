@@ -326,10 +326,10 @@ The tracker is where tickets live. A project has one tracker, kept in `<project>
 | `github` | `gh` | `github_repo` |
 | `linear` | a Linear MCP server | `linear_team` |
 | `local` (the default) | nothing | none |
-| `orbit` | `orbit` with Batches and Annotations (0.10.16 or later) | none; optional `orbit_dir` |
+| `orbit` | `orbit` 0.11.0 or later, contract 1 and the kinetic profile | none; optional `orbit_dir` |
 | `other` | whatever you describe | `tracker_description` |
 
-Each tracker is one prose file, `trackers/<name>.md`, that tells the skills how to create a ticket, link blockers, set a status and so on in that tracker. No Python talks to a tracker, so adding one means adding one adapter file. Skills use roles, not tracker words: `names.kind.human` (the label or type for a human ticket), `names.edge.merge`, `names.after`, `names.ships_with`, `names.related` and `names.status.<role>`.
+Each tracker is one prose file, `trackers/<name>.md`, that tells the skills how to create a ticket, link blockers, set a status and so on in that tracker. The prose adapter describes tracker operations; Orbit also has a native ticket store. Adding a tracker with local ticket storage means adding one adapter file. Skills use roles, not tracker words: `names.kind.human` (the label or type for a human ticket), `names.edge.merge`, `names.after`, `names.ships_with`, `names.related` and `names.status.<role>`.
 
 To rename any of these for your project, override them in the project config:
 
@@ -341,18 +341,29 @@ To rename any of these for your project, override them in the project config:
 }
 ```
 
-`tracker_names` is merged key by key over the adapter's defaults; a missing role is an error. `kinetic tracker resolve` prints what kinetic resolved. kinetic state stays authoritative: remote trackers are written to, never read back.
+`tracker_names` is merged key by key over the adapter's defaults; a missing role is an error. `kinetic tracker resolve` prints what kinetic resolved. The local ticket store stays authoritative for remote trackers; Orbit uses its native Board as the ticket store.
 
 ### Orbit: tickets on an Orbit Board
 
-With `tracker: orbit` a run's tickets live on an [Orbit](https://github.com/rcmendes/orbit) Board instead of in `state.json`, so there is one copy and nothing to drift. kinetic still schedules: the frontier, edge types, the parallel cap and fix rounds are unchanged. This works through the **ticket store**, the interface `state.py` reads and writes tickets through; every other tracker uses the local ticket store, exactly as before.
+The native Orbit workflow is shipped in `profiles/kinetic.toml`. `kinetic install --harness <name>` registers it with Orbit; run `orbit setup kinetic` at the Board anchor to apply it. See [the profile smoke check](docs/smoke/orbit-profile.md) for native statuses, review policy and setup verification. Applying the profile changes the Board workflow; migrate existing runs before switching them.
 
-- **What lives where.** The run's spec is a top-level Task (`type: epic`); each slice is a plain Task nested under it and each ticket a SubTask of its slice (runs published before spec Tasks keep slices as `epic` Parent Tasks). The spec gate's answer is mirrored on the spec Task (its waiting reason and a `phase` Annotation), and it closes when the last slice finishes. Every kinetic field is in the Task's `kinetic` Annotation; Orbit's status, claim, waiting reason and labels are derived from it. A `blocked_by` edge is an Orbit dependency, with its edge type in the Annotation. Every Task of a run carries the label `kinetic-run-<run id>`.
-- **Decompose.** Tickets are staged in `<run_dir>/.kinetic/tickets.staged.json` with local ids, validated, and published in one `orbit batch` when the breakdown gate is approved (`kinetic state publish-tickets` does it on demand). Source Keys make a repeated publish safe.
-- **Other agents keep out.** Waiting agent tickets carry the hold label `kinetic`; add it to `non_ready_labels` in the Board's `config.toml` (doctor warns until you do). kinetic removes it and claims the Task in one batch when it dispatches the ticket.
-- **People.** A human ticket carries `ready-for-human`; finish it with `orbit done <id>`. An agent ticket marked done outside kinetic becomes `needs_decision`, because it has no passing verify.
-- **Liveness.** kinetic's PostToolUse hooks heartbeat the running ticket's claim at most every 5 minutes; `/kinetic:status` lists a running ticket whose lease lapsed as "implementer may be stuck".
-- **Board.** Found from `tracker_settings.orbit_dir`, else the run's first repo, then fixed for the run. `kinetic doctor` checks the binary, the Board, the export schema, the SubTask depth (`max_subtask_depth = 2`) and the hold label.
+Orbit work stays `in_review` until both spec and standards review approve. `kinetic state submit-review` attaches passing verify evidence; `record-review` records independent verdicts and native fix attempts. Integration review targets the run's owned spec after full repo verifies.
+
+With `tracker: orbit`, a run's tickets live on an [Orbit](https://github.com/rcmendes/orbit) Board. The ticket store reads native Issue status, parent, assignee, lease and typed links; its `kinetic` Property holds only execution metadata. Other trackers keep the local ticket store.
+
+- **Hierarchy.** Each run owns a top-level `epic` spec, `task` slices beneath it, and `sub-task` tickets beneath each slice. Starting from a user Issue adds a nonblocking `relates-to` link from the owned spec; kinetic never claims, moves or closes that user Issue. Spec approval answers the owned spec's decision gate. The spec stays open until integration review approves it.
+- **Publication.** Tickets are staged in `<run_dir>/.kinetic/tickets.staged.json`, validated, then published in one batch at the breakdown gate. Source Keys make repeated publication safe. Each owned Issue carries `kinetic-run-<run-id>` for discovery.
+- **Native workflow.** Tickets use `todo`, `running`, `needs_decision`, `blocked`, `in_review`, `done`, `done_with_concerns`, `merged` and `released`. Labels identify runs and human tickets; they do not translate lifecycle states. Blocking links carry the `snapshot`, `merge` or `release` edge attribute. `after`, `ships-with` and `relates-to` links remain nonblocking.
+- **Identities and liveness.** Each ticket implementer uses `kinetic-<run-id>-implementer-<ticket-id>`. Spec, standards, fix and integration reviewers have distinct identities and never take the author's lease. Post-tool hooks heartbeat the active implementer assignee at most every five minutes per worktree. An expired lease appears as “implementer may be stuck.” Human tickets remain manual; `kinetic state human-done` records their completion.
+- **Review.** A passing verify becomes submission evidence. Both ticket review axes must approve before the ticket completes; a request for changes starts the next attempt. Integration review completes the owned spec. Review policy requires a reviewer distinct from the author.
+- **Reads and writes.** Status and board resume `orbit changes --since` from `.kinetic/orbit-feed.json`. State writes use atomic batches with version guards and a persisted idempotency key in `.kinetic/orbit-write.json`; retrying after a crash does not duplicate the write. Concurrent versions refresh and retry up to three times.
+- **Preflight.** `orbit capabilities` must report contract major 1 and the required workflow, policy, issue types, hierarchy, links, properties, assignee, lease, batch, idempotency, profiles and setup capabilities. Missing requirements stop the operation with their names. Optional remote, workspace, scheduler, hooks and index modules may be absent. Doctor checks the native kinetic profile/statuses.
+
+### Existing Orbit runs
+
+First migrate the Board model with `orbit migrate model` (preview), then `orbit migrate model --apply` at its anchor. Existing run metadata remains readable for status reports. Preview the kinetic conversion with `kinetic orbit_store migrate --run <run_dir>`; add `--apply` to convert that run's owned Issues to native statuses, typed links and Properties. Repeat for each existing run. Pause active implementers before applying migration. Applying a migration needs Python 3.11 or later (preview runs on any supported version).
+
+Migration changes the Board workflow. It retains existing status names for unrelated Issues, keeps old transitions with conflicting names under `legacy_<name>`, and uses native `todo` as the ready state. Unrelated Issues keep their stored status, assignee, links and timestamps; their available transitions and readiness follow the new Board workflow. Historical hierarchy and Issue IDs are retained because Orbit has no reparent operation. New runs use the three-level hierarchy. Applied profile sources remain in the run's `.kinetic` directory; keep them with the run. A failed migration can be retried; the Board's Git history records profile and Issue changes.
 
 ## Human tickets
 
@@ -604,7 +615,7 @@ The suite covers every script module and every hook, plus an end-to-end test tha
 
 ## Status and known limitations
 
-kinetic is at 0.4.0 (see `.claude-plugin/plugin.json`); 0.4.0 adds the discover phase (repos found from approved sources, worktrees cut at discover, repos read-only until the breakdown gate); 0.3.0 adds trackers, human tickets, relationship types, the local board and the PR template override, and 0.3.1 corrects the hook wording, flags unmerged agent tickets at ship, and keeps file modes on atomic writes. The scripts and hooks are tested; the skills and agents have not yet been exercised in a live end-to-end run. `docs/plan/kinetic-v0-rulings.md` records every decision made while building it and the v0.2 backlog.
+kinetic is at 0.6.0 (see `.claude-plugin/plugin.json`). This release uses native Orbit contracts, workflows, links, hierarchy, role identities, review evidence and incremental reads. Existing runs have an explicit migration path; local ticket stores retain their behavior. Scripted temporary-Board integration checks cover publication, migration and reviews. Live harness acceptance remains a separate smoke test. `docs/plan/kinetic-v0-rulings.md` records the original design decisions.
 
 Not yet verified in a live session:
 

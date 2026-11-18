@@ -1,14 +1,14 @@
-"""Orbit ticket store: a run's tickets are Tasks on an Orbit Board.
+"""Orbit ticket store: native Issues, workflow states, hierarchy and typed links.
 
-The only module in kinetic that knows Orbit. Tickets are SubTasks of their
-slice's Parent Task; every kinetic field lives in the Task's `kinetic`
-Annotation, which is authoritative, and the Orbit status, claim, waiting
-reason and labels are derived from it and written in the same `orbit batch`.
-Tickets not yet published are staged in <run_dir>/.kinetic/tickets.staged.json.
+Kinetic-only metadata lives in the kinetic Property. Published tickets use
+Orbit as their source of truth; unpublished tickets are staged in
+<run_dir>/.kinetic/tickets.staged.json.
 """
 from __future__ import annotations
 
 import json
+import hashlib
+import uuid
 import re
 import subprocess
 import time
@@ -20,14 +20,15 @@ from kinetic.ticket_store import TicketStoreError
 ANNOTATION_OWNER = "kinetic"
 LOCK_RETRIES = (0.2, 0.4, 0.8)
 STAGED = "tickets.staged.json"
-SCHEMA_VERSION = 3  # orbit export schema with Annotations and Source Keys
-MIN_ORBIT = "0.10.16"  # Batches, Annotations and nested SubTasks (board.max_subtask_depth)
-DEPTH_FIX = "add max_subtask_depth = 2 under [board] in the Board's config.toml"
+MIN_ORBIT = "0.11.0"
+REQUIRED_CAPABILITIES = {"workflow", "policy", "issue-types", "hierarchy", "links", "properties",
+                         "assignee", "lease", "batch", "idempotency", "profiles", "setup"}
+NATIVE_STATUSES = {"todo", "running", "needs_decision", "blocked", "done_with_concerns",
+                   "merged", "done", "released", "in_review", "cancelled"}
 DONE = ("done", "done_with_concerns", "merged", "released")
 PAUSED = ("needs_decision", "blocked")
-SPEC_WAITING = "kinetic: spec approval"  # set while the spec gate is open
 SPEC_GENERATED = "generated from spec.md; edit the file, then publish-spec again"
-# The spec Task's `phase` Annotation for each sync_spec event.
+# The owned spec Issue's phase Property for each sync_spec event.
 SPEC_PHASES = {"gate-approved": "approved", "gate-rejected": "revising",
                "building": "building"}
 # Keys read() adds that are not ticket fields and are never written back.
@@ -50,7 +51,7 @@ def call(anchor: str, args: list, stdin: str | None = None) -> dict:
             done = subprocess.run(cmd, input=stdin, capture_output=True, text=True, cwd=cwd)
         except FileNotFoundError:
             raise OrbitStoreError("NOT_INSTALLED", "the orbit command was not found",
-                                  f"install orbit with Batches and Annotations ({MIN_ORBIT} or later)")
+                                  f"install orbit {MIN_ORBIT} or later with contract 1 support")
         try:
             envelope = json.loads(done.stdout or "{}")
         except ValueError:
@@ -68,86 +69,154 @@ def call(anchor: str, args: list, stdin: str | None = None) -> dict:
 
 
 def _fix(code: str, message: str = "") -> str:
-    if code == "INVALID_ARGUMENT" and "board.max_subtask_depth" in message:
-        return DEPTH_FIX
     return {
         "LOCKED": "another orbit command holds the Board lock; retry",
         "BOARD_NOT_FOUND": "set tracker_settings.orbit_dir or run orbit init in the repo",
     }.get(code, "")
 
 
+def negotiate(anchor: str) -> dict:
+    """Check the kernel contract; optional Board modules are not required."""
+    data = call(anchor, ["capabilities"])
+    board = data.get("board") or {}
+    versions = (data.get("contract", ""), board.get("contract", ""))
+    if (any(not re.fullmatch(r"1(?:\.\d+){0,2}", str(version)) for version in versions)
+            or board.get("compatible") is not True):
+        raise OrbitStoreError("CONTRACT_VERSION_UNSUPPORTED",
+                              f"kinetic needs Orbit contract 1; binary={versions[0]}, Board={versions[1]}",
+                              "upgrade orbit or migrate the Board to contract 1")
+    missing = sorted(REQUIRED_CAPABILITIES - set(data.get("capabilities") or []))
+    if missing:
+        raise OrbitStoreError("MISSING_CAPABILITIES", "missing required capabilities: " + ", ".join(missing),
+                              f"install orbit {MIN_ORBIT} or later with these capabilities")
+    return data
+
+
 def run_label(run_id: str, names: dict) -> str:
     return names["run"].replace("<run id>", run_id)
 
 
-def holder(run_id: str) -> str:
-    return f"kinetic-{run_id}"
+def holder(run_id: str, ticket_id: str | None = None, role: str = "orchestrator") -> str:
+    parts = [run_id, role, *([ticket_id] if ticket_id else [])]
+    if any(not re.fullmatch(r"[A-Za-z0-9_.-]+", part) for part in parts):
+        raise ValueError("Orbit identity parts must contain only letters, numbers, dots, underscores or hyphens")
+    return "kinetic-" + "-".join(parts)
 
 
 def _fields(t: dict) -> dict:
     return {k: v for k, v in t.items() if k not in DERIVED}
 
 
+def _property_fields(t: dict) -> dict:
+    native = {"status", "slice", "assignee", "blocked_by", "after", "related", "ships_with"}
+    return {k: v for k, v in _fields(t).items() if k not in native}
+
+
 def derive(ticket: dict, run_id: str, names: dict) -> dict:
-    """Orbit status, claim holder, waiting reason and labels for a ticket."""
-    status = ticket.get("status", "todo")
-    human = ticket.get("kind") == "human"
+    """Native status and identifying labels for a ticket."""
     labels = {run_label(run_id, names)}
-    if ticket.get("ships_with"):
-        labels.add(names["ships_with"].replace("<group>", ticket["ships_with"]))
-    if human and names["kind"]["human"]:
+    if ticket.get("kind") == "human" and names["kind"]["human"]:
         labels.add(names["kind"]["human"])
-    if status in DONE:
-        return {"status": "done", "claim": None, "waiting_on": None, "labels": labels}
-    if status == "todo":
-        if not human:
-            labels.add(names["hold"])
-        return {"status": "todo", "claim": None, "waiting_on": None, "labels": labels}
-    waiting = None
-    if status in PAUSED:
-        waiting = ticket.get("human_note") or f"kinetic: {status}"
-    return {"status": "in_progress", "claim": holder(run_id), "waiting_on": waiting,
-            "labels": labels}
+    return {"status": ticket.get("status", "todo"), "labels": labels}
+
+
+def _links(ticket: dict, run_id: str) -> dict:
+    links = {}
+    for edge in ticket.get("blocked_by", []):
+        links[("blocks", "to", edge["id"])] = {"blocking": True,
+                                                   "attributes": {"edge": edge["type"]}}
+    for field, kind in (("after", "after"), ("related", "relates-to")):
+        for target in ticket.get(field, []):
+            links[(kind, "to", target)] = {"blocking": False, "attributes": {}}
+    group = ticket.get("ships_with")
+    if group:
+        links[("ships-with", "external", f"kinetic:{run_id}:ship:{group}")] = {
+            "blocking": False, "attributes": {"group": group}}
+    return links
+
+
+def _status_ops(tid: str, before: str, after: str, who: str) -> list:
+    if before == after:
+        return []
+    ops = []
+
+    def transition(name):
+        ops.append({"op": "transition", "id": tid, "name": name, "by": who})
+
+    if before == "done" and after == "done_with_concerns":
+        transition("concerns")
+        return ops
+    if before in DONE and not (before in ("done", "done_with_concerns")
+                               and after in ("merged", "released")
+                               or before == "merged" and after == "released"):
+        ops.append({"op": "reopen", "id": tid})
+        before = "todo"
+    if after == "running":
+        if before in PAUSED:
+            transition("resume")
+            ops.append({"op": "claim", "id": tid, "by": who})
+        elif before == "in_review":
+            transition("request_changes")
+        else:
+            ops.append({"op": "claim", "id": tid, "by": who})
+    elif after == "todo":
+        if before in PAUSED:
+            transition("resume")
+        elif before == "in_review":
+            transition("request_changes")
+        if before != "todo":
+            ops.append({"op": "release", "id": tid, "by": who})
+    elif after in ("blocked", "needs_decision"):
+        if before in PAUSED:
+            transition("resume")
+        transition("block" if after == "blocked" else "escalate")
+    elif after in DONE:
+        if after == "done_with_concerns":
+            if before != "running" and before != "in_review":
+                if before in PAUSED:
+                    transition("resume")
+                else:
+                    ops.append({"op": "claim", "id": tid, "by": who})
+            transition("concerns")
+        else:
+            if before not in DONE:
+                ops.append({"op": "done", "id": tid, "by": who})
+            if after in ("merged", "released") and before != "merged":
+                transition("merge")
+            if after == "released":
+                transition("release_artifact")
+    else:
+        raise OrbitStoreError("INVALID_ARGUMENT", f"unsupported kinetic status '{after}'")
+    return ops
 
 
 def ops_for(tid: str, before: dict | None, after: dict, run_id: str, names: dict) -> list:
-    """`orbit batch` operations moving a published ticket from before to after."""
+    """Native workflow, links and Property updates in one Orbit batch."""
     if before is not None and _fields(before) == _fields(after):
         return []
-    b = derive(before, run_id, names) if before is not None else None
-    a = derive(after, run_id, names)
-    ops: list = []
-    who = holder(run_id)
-    if b and b["status"] == "done" and a["status"] != "done":
-        ops.append({"op": "reopen", "id": tid})
-        b = {**b, "status": "todo", "claim": None}
-    if b and b["waiting_on"] and not a["waiting_on"]:
-        ops.append({"op": "update", "id": tid, "clear_waiting": True})
-    old_labels = b["labels"] if b else set()
+    if (after.get("kind") != "human" and after.get("status") in DONE
+            and (before or {}).get("status") not in DONE):
+        raise OrbitStoreError("REVIEW_REQUIRED", "agent completion requires approved reviews",
+                              "submit-review, then record-review for spec and standards")
+    old, new = _links(before or {}, run_id), _links(after, run_id)
+    ops = []
+    for key, value in old.items():
+        if new.get(key) != value:
+            kind, target_field, target = key
+            ops.append({"op": "unlink", "id": tid, "type": kind, target_field: target})
+    for key, value in new.items():
+        if old.get(key) != value:
+            kind, target_field, target = key
+            ops.append({"op": "link", "id": tid, "type": kind, target_field: target, **value})
+    b, a = derive(before or {}, run_id, names), derive(after, run_id, names)
+    old_labels = b["labels"] if before is not None else set()
     add, remove = sorted(a["labels"] - old_labels), sorted(old_labels - a["labels"])
     if add or remove:
-        label = {"op": "label", "id": tid}
-        if add:
-            label["add"] = add
-        if remove:
-            label["remove"] = remove
-        ops.append(label)
-    old_deps = {e["id"] for e in (before or {}).get("blocked_by", [])}
-    new_deps = {e["id"] for e in after.get("blocked_by", [])}
-    ops += [{"op": "depend", "id": tid, "on": d} for d in sorted(new_deps - old_deps)]
-    ops += [{"op": "undepend", "id": tid, "on": d} for d in sorted(old_deps - new_deps)]
-    # Claim when entering in_progress, and renew when resuming a paused ticket
-    # (its Lease may have lapsed while it waited).
-    resuming = (before or {}).get("status") in PAUSED and after.get("status") == "running"
-    if a["claim"] and (not b or b["claim"] != a["claim"] or resuming):
-        ops.append({"op": "claim", "id": tid, "by": who})
-    if a["waiting_on"] and (not b or b["waiting_on"] != a["waiting_on"]):
-        ops.append({"op": "update", "id": tid, "waiting_on": a["waiting_on"]})
-    if b and b["status"] == "in_progress" and a["status"] == "todo":
-        ops.append({"op": "release", "id": tid, "by": who, "force": True})
-    if a["status"] == "done" and (not b or b["status"] != "done"):
-        ops.append({"op": "done", "id": tid, "by": who})
-    ops.append({"op": "annotate", "id": tid, "owner": ANNOTATION_OWNER, "value": _fields(after)})
+        ops.append({"op": "label", "id": tid, "add": add, "remove": remove})
+    if b["status"] != a["status"]:
+        ops += _status_ops(tid, b["status"], a["status"], holder(run_id, tid, "implementer"))
+    ops.append({"op": "property", "id": tid, "owner": ANNOTATION_OWNER,
+                "value": _property_fields(after)})
     return ops
 
 
@@ -197,15 +266,42 @@ def _lapsed(lease_until) -> bool:
 
 
 def to_ticket(task: dict) -> dict:
-    t = dict((task.get("annotations") or {}).get(ANNOTATION_OWNER) or {})
-    if t.get("status") == "running":
+    metadata = (task.get("properties") or {}).get(ANNOTATION_OWNER)
+    if metadata is None:
+        metadata = (task.get("annotations") or {}).get(ANNOTATION_OWNER)
+    if not metadata:
+        return {}
+    from kinetic.state import ticket_defaults
+    t = {**ticket_defaults(), **metadata}
+    if "status" in metadata:
+        # Pre-native runs keep their authoritative ticket fields until explicit migration.
+        if t["status"] == "running":
+            t["liveness"] = "stuck" if _lapsed(task.get("lease_until")) else "alive"
+        return t
+    t["status"] = task.get("status", t["status"])
+    t["slice"] = task.get("parent", t["slice"])
+    if task.get("assignee"):
+        t["assignee"] = task["assignee"]
+    t.update(blocked_by=[], after=[], related=[], ships_with=None)
+    for link in task.get("links", []):
+        kind, target = link["type"], link["target"]
+        attributes = link.get("attributes") or {}
+        if kind == "blocks" and isinstance(target, str) and link.get("blocking", True):
+            t["blocked_by"].append({"id": target, "type": attributes.get("edge", "merge")})
+        elif kind in ("after", "relates-to") and isinstance(target, str):
+            t["after" if kind == "after" else "related"].append(target)
+        elif kind == "ships-with":
+            t["ships_with"] = attributes.get("group")
+    if t["status"] == "running":
         t["liveness"] = "stuck" if _lapsed(task.get("lease_until")) else "alive"
     return t
 
 
 def _role(task: dict):
-    """The kinetic role Annotation: "spec", "slice" or None (a ticket)."""
-    return ((task.get("annotations") or {}).get(ANNOTATION_OWNER) or {}).get("role")
+    """The kinetic role Property: spec, slice or None (a ticket)."""
+    metadata = ((task.get("properties") or {}).get(ANNOTATION_OWNER)
+                or (task.get("annotations") or {}).get(ANNOTATION_OWNER) or {})
+    return metadata.get("role")
 
 
 def _is_slice(task: dict, label: str) -> bool:
@@ -220,6 +316,7 @@ def _is_slice(task: dict, label: str) -> bool:
 class OrbitTicketStore:
     def __init__(self, config: dict):
         self.config = config
+        self._negotiated = False
 
     # -- configuration resolved on first use, then kept in state.json --
     @staticmethod
@@ -253,7 +350,7 @@ class OrbitTicketStore:
             return self.config["spec_task"]
         data = call(self._anchor(st), ["list", "--include-closed", "--all", "--label",
                                        run_label(st["run_id"], self._names(st))])
-        for task in data.get("tasks", []):
+        for task in data.get("issues", []):
             if _role(task) == "spec":
                 self.config["spec_task"] = task["id"]
                 return task["id"]
@@ -266,13 +363,119 @@ class OrbitTicketStore:
             settings = tracker.resolve(settings=proj / ".kinetic" / "config.json")["settings"]
             anchor = settings.get("orbit_dir") or proj
             self.config["anchor"] = str(Path(anchor).expanduser())
+        if not self._negotiated:
+            negotiate(self.config["anchor"])
+            self._negotiated = True
         return self.config["anchor"]
+
+    def _resume_pending(self, st: dict) -> None:
+        from kinetic.state import internal
+        journal = internal(st["run_dir"]) / "orbit-write.json"
+        if journal.exists():
+            pending = json.loads(journal.read_text())
+            request = pending.get("request")
+            if request is None:
+                request = [{k: v for k, v in op.items() if k != "if_version"}
+                           for op in pending["operations"]]
+            self._batch(st, request)
 
     def _batch(self, st: dict, operations: list) -> dict:
         if not operations:
             return {"keys": {}, "results": []}
-        return call(self._anchor(st), ["batch", "--file", "-"],
-                    stdin=json.dumps({"operations": operations}))
+        from kinetic.state import atomic_write, internal
+        anchor = self._anchor(st)
+        journal = internal(st["run_dir"]) / "orbit-write.json"
+        digest = hashlib.sha256(json.dumps(operations, sort_keys=True).encode()).hexdigest()
+        pending = json.loads(journal.read_text()) if journal.exists() else None
+        if pending and pending["digest"] != digest:
+            self._resume_pending(st)
+            return self._batch(st, operations)
+        if not pending:
+            cache = internal(st["run_dir"]) / "orbit-feed.json"
+            snapshot = json.loads(cache.read_text()).get("issues", {}) if cache.exists() else {}
+            versions = {}
+            guarded = []
+            for operation in operations:
+                op = dict(operation)
+                tid = op.get("id")
+                if tid and not tid.startswith("key:"):
+                    if tid not in versions:
+                        versions[tid] = snapshot.get(tid, {}).get("updated_at") or call(anchor, ["show", tid])["updated_at"]
+                    op["if_version"] = versions[tid]
+                guarded.append(op)
+            pending = {"digest": digest, "key": "kinetic-" + uuid.uuid4().hex,
+                       "operations": guarded, "request": operations}
+            atomic_write(journal, json.dumps(pending))
+        for attempt in range(3):
+            try:
+                result = call(anchor, ["batch", "--file", "-", "--idempotency-key", pending["key"]],
+                              stdin=json.dumps({"operations": pending["operations"]}))
+            except OrbitStoreError as error:
+                if error.code != "VERSION_CONFLICT":
+                    if error.code not in ("LOCKED", "BAD_OUTPUT", "ORBIT_FAILED"):
+                        journal.unlink(missing_ok=True)
+                    raise
+                if attempt == 2:
+                    journal.unlink(missing_ok=True)
+                    raise
+                # A rejected batch made no changes. Refresh guards before retrying;
+                # property writes remain scoped to kinetic's namespace.
+                versions = {op["id"]: call(anchor, ["show", op["id"]])["updated_at"]
+                            for op in pending["operations"] if "if_version" in op}
+                for op in pending["operations"]:
+                    if "if_version" in op:
+                        op["if_version"] = versions[op["id"]]
+                atomic_write(journal, json.dumps(pending))
+            else:
+                journal.unlink()
+                return result
+
+    def _issues(self, st: dict) -> list:
+        """Resume a durable feed snapshot; capture the cursor before the full read."""
+        self._resume_pending(st)
+        from kinetic.state import atomic_write, internal
+        cache = internal(st["run_dir"]) / "orbit-feed.json"
+        anchor = self._anchor(st)
+        label = run_label(st["run_id"], self._names(st))
+        saved = json.loads(cache.read_text()) if cache.exists() else None
+        if saved and saved.get("anchor") != anchor:
+            saved = None
+        args = ["changes"] + (["--since", saved["cursor"]] if saved else [])
+        try:
+            feed = call(anchor, args)
+        except OrbitStoreError as error:
+            if not saved or error.code not in ("INVALID_ARGUMENT", "INVALID_CURSOR"):
+                raise
+            saved = None
+            feed = call(anchor, ["changes"])
+        if saved is None or any(e.get("type") == "board.changed" for e in feed["events"]):
+            snapshot = {}
+            cursor = None
+            while True:
+                args = ["list", "--include-closed", "--all", "--label", label]
+                if cursor:
+                    args += ["--cursor", cursor]
+                page = call(anchor, args)
+                snapshot.update((issue["id"], issue) for issue in page.get("issues", []))
+                cursor = page.get("next_cursor")
+                if not cursor:
+                    break
+        else:
+            snapshot = saved["issues"]
+            for tid in {e["issue"] for e in feed["events"] if e.get("issue")}:
+                try:
+                    issue = call(anchor, ["show", tid])
+                except OrbitStoreError as error:
+                    if error.code != "NOT_FOUND":
+                        raise
+                    snapshot.pop(tid, None)
+                    continue
+                if label in issue.get("labels", []):
+                    snapshot[tid] = issue
+                else:
+                    snapshot.pop(tid, None)
+        atomic_write(cache, json.dumps({"anchor": anchor, "cursor": feed["cursor"], "issues": snapshot}))
+        return list(snapshot.values())
 
     # -- staged tickets --
     def stage_path(self, run_dir) -> Path:
@@ -304,9 +507,11 @@ class OrbitTicketStore:
             return {}  # nothing published before the run has a Board
         run_id, names = st["run_id"], self._names(st)
         label = run_label(run_id, names)
-        data = call(self._anchor(st), ["list", "--include-closed", "--all",
-                                       "--label", label])
-        tasks = data.get("tasks", [])
+        tasks = self._issues(st)
+        self.config["needs_migration"] = any(
+            "status" in ((task.get("properties") or {}).get(ANNOTATION_OWNER)
+                         or (task.get("annotations") or {}).get(ANNOTATION_OWNER) or {})
+            or task.get("status") not in NATIVE_STATUSES for task in tasks)
         prefix = source_key(run_id, "")
         ids = {task["source_key"][len(prefix):]: task["id"] for task in tasks
                if (task.get("source_key") or "").startswith(prefix)
@@ -327,7 +532,12 @@ class OrbitTicketStore:
             t = _rewrite(to_ticket(task), ids)
             if not t:
                 continue
-            if task.get("status") == "done" and t.get("status") not in DONE:
+            metadata = ((task.get("properties") or {}).get(ANNOTATION_OWNER)
+                        or (task.get("annotations") or {}).get(ANNOTATION_OWNER) or {})
+            from kinetic.state import done_refusal
+            verified = done_refusal({**st, "tickets": {task["id"]: t}}, task["id"]) is None
+            completed_here = metadata.get("status") in DONE or verified or t.get("done_by") == "human"
+            if task.get("status") == "done" and not completed_here:
                 # Done in Orbit but not in kinetic: someone finished it outside kinetic.
                 actual = dict(t, status="done")
                 if t.get("kind") == "human":
@@ -339,20 +549,18 @@ class OrbitTicketStore:
         spec = next((t for t in tasks if _role(t) == "spec"), None)
         if spec:
             self.config["spec_task"] = spec["id"]
-            slices = [t for t in tasks if _is_slice(t, label) and t["id"] in ids.values()]
-            if (slices and spec.get("status") == "todo"
-                    and all(t.get("status") == "done" for t in slices)):
-                # Every slice is done but the spec Task is not: a missed close heals here.
-                fixes.append({"op": "done", "id": spec["id"], "by": holder(run_id)})
         if fixes:
             self._batch(st, fixes)
         return tickets
 
     def write(self, run_dir, st: dict, before: dict, after: dict) -> None:
+        if self.config.get("needs_migration"):
+            raise OrbitStoreError("MIGRATION_REQUIRED", "this run still has legacy ticket fields",
+                                  "run kinetic orbit_store migrate --run <run_dir> --apply")
         staged = self._staged(run_dir)
         run_id, names = st["run_id"], self._names(st)
         # After the first publish, a new ticket (a NEEDS_HUMAN ticket, a review fix)
-        # goes to the Board in this same Batch instead of waiting in the staged file.
+        # is staged durably, then published before the remaining state updates.
         published = bool(self.config.get("published"))
         aliases = st.get("ticket_aliases") or {}
         new, changes, staged_changed = {}, [], False
@@ -365,12 +573,18 @@ class OrbitTicketStore:
                     staged_changed = True
             else:
                 changes += ops_for(tid, before[tid], t, run_id, names)
-        ref = self._ref(run_id, set(new), aliases)
+        if published and (new or staged):
+            self._save_staged(run_dir, {**staged, **new})
+            mapping = self.publish(run_dir, st)
+            aliases = {**aliases, **mapping}
+            st["ticket_aliases"] = aliases
+            staged, staged_changed = {}, False
+        ref = self._ref(run_id, set(), aliases)
         for op in changes:
-            if op["op"] in ("depend", "undepend"):
-                op["on"] = ref(op["on"])
-        operations = (self._add_ops(run_dir, st, new, [], aliases)[0] + changes
-                      + self._close_slices(st, staged, before, after))
+            if op["op"] in ("link", "unlink") and "to" in op:
+                op["to"] = ref(op["to"])
+        rewritten = {aliases.get(tid, tid): _rewrite(t, aliases) for tid, t in after.items()}
+        operations = changes + self._close_slices(st, staged, before, rewritten)
         self._batch(st, operations)
         if staged_changed:
             self._save_staged(run_dir, staged)
@@ -385,44 +599,46 @@ class OrbitTicketStore:
         return ref
 
     def _add_ops(self, run_dir, st: dict, tickets: dict, new_slices: list, aliases: dict):
-        """`add` operations for slices and tickets not yet on the Board; returns (ops, order)."""
+        """Create every Issue before linking, so non-blocking links may point forward."""
         from kinetic import graph
         run_id, names = st["run_id"], self._names(st)
         ref = self._ref(run_id, set(tickets) | set(new_slices), aliases)
         spec_id = self._spec_id(st) if new_slices else None
         ops = []
-        for s in new_slices:
-            add = {"op": "add", "key": source_key(run_id, s),
-                   "title": ticket_text(run_dir, s)[0],
-                   "labels": [run_label(run_id, names)]}
+        for slice_id in new_slices:
+            add = {"op": "add", "key": source_key(run_id, slice_id),
+                   "title": ticket_text(run_dir, slice_id)[0],
+                   "type": "task",
+                   "labels": [run_label(run_id, names)],
+                   "properties": {ANNOTATION_OWNER: {"role": "slice"}}}
             if spec_id:
-                # New shape: a plain Task nested under the run's spec Task.
                 add["parent"] = spec_id
-                add["annotations"] = {ANNOTATION_OWNER: {"role": "slice", "spec": spec_id}}
-            else:
-                add["type"] = "epic"
-                # optional: Boards and runs without a recorded spec never see this Annotation
-                if st.get("spec"):
-                    add["annotations"] = {ANNOTATION_OWNER: {"spec": st["spec"]}}
+                add["properties"][ANNOTATION_OWNER]["spec"] = spec_id
+            elif st.get("spec"):
+                add["properties"][ANNOTATION_OWNER]["spec"] = st["spec"]
             ops.append(add)
         try:
             order = graph.topo_order(tickets)
         except ValueError:
-            order = sorted(tickets)  # graph validate reports the cycle; Orbit refuses it
+            order = sorted(tickets)  # graph validation reports the cycle; Orbit refuses it
         for pid in order:
             t = tickets[pid]
             title, body = ticket_text(run_dir, pid)
-            fresh = dict(t, status="todo")
             add = {"op": "add", "key": source_key(run_id, pid), "title": title, "body": body,
-                   "labels": sorted(derive(fresh, run_id, names)["labels"]),
-                   "depends_on": [ref(e["id"]) for e in t.get("blocked_by", [])],
-                   "annotations": {ANNOTATION_OWNER: _fields(t)}}
+                   "type": "sub-task" if t.get("slice") else "task",
+                   "labels": sorted(derive(t, run_id, names)["labels"]),
+                   "properties": {ANNOTATION_OWNER: _property_fields(t)}}
             if t.get("slice"):
                 add["parent"] = ref(t["slice"])
             ops.append(add)
-            if t.get("status", "todo") != "todo":
-                ops += [o for o in ops_for(ref(pid), fresh, t, run_id, names)
-                        if o["op"] not in ("depend", "undepend")]
+        for pid in order:
+            initial = dict(tickets[pid], status="todo")
+            for op in ops_for(ref(pid), None, initial, run_id, names):
+                if op["op"] == "label":
+                    continue  # identifying labels were set by add
+                if op["op"] in ("link", "unlink") and "to" in op:
+                    op["to"] = ref(op["to"])
+                ops.append(op)
         return ops, order
 
     def _close_slices(self, st: dict, staged: dict, before: dict, after: dict) -> list:
@@ -439,74 +655,71 @@ class OrbitTicketStore:
             just = any((before.get(t) or {}).get("status") not in DONE for t in tids)
             if finished and just:
                 ops.append({"op": "done", "id": slice_id, "by": holder(st["run_id"])})
-        # Orbit refuses `done` on a Task with open SubTasks, so the spec closes
-        # only once every published slice's tickets are done. Decompose keeps
-        # every published slice non-empty (graph.validate refuses a slice no
-        # ticket references), so each one shows up in by_slice; an empty slice
-        # would make this check never pass.
-        if ops and all(
-                by_slice.get(sid)
-                and all(after[t].get("status") in DONE for t in by_slice[sid])
-                for sid in published):
-            spec_id = self._spec_id(st)
-            if spec_id:
-                ops.append({"op": "done", "id": spec_id, "by": holder(st["run_id"])})
+        # Integration review completes the spec; finishing slices alone is insufficient.
         return ops
 
     def spec_ops(self, run_dir, st: dict, title: str, body: str) -> list:
-        """Batch operations publishing the run's spec Task: one `add` whose Source Key
-        matches the Task when it exists, so the ops that follow rewrite it either way."""
+        """Publish an owned epic, linking any user Issue without mutating it."""
+        self._resume_pending(st)
         run_id, names = st["run_id"], self._names(st)
         key = source_key(run_id, "spec")
-        ref = f"key:{key}"
-        labels = sorted({run_label(run_id, names), names["spec"], names["hold"]})
-        annotation = {"role": "spec", "run": run_id, "phase": "awaiting-approval"}
+        existing = self._spec_id(st)
+        ref = existing or f"key:{key}"
+        labels = sorted({run_label(run_id, names), names["spec"]})
+        value = {"role": "spec", "run": run_id, "phase": "awaiting-approval"}
         text = f"{SPEC_GENERATED}\n\n{body}"
-        return [
-            {"op": "add", "key": key, "title": title, "type": "epic",
-             "labels": labels, "waiting_on": SPEC_WAITING, "body": text,
-             "annotations": {ANNOTATION_OWNER: annotation}},
-            {"op": "update", "id": ref, "title": title, "body": text,
-             "waiting_on": SPEC_WAITING},
-            {"op": "annotate", "id": ref, "owner": ANNOTATION_OWNER, "value": annotation},
-            {"op": "label", "id": ref, "add": labels},
-        ]
+        ops = [{"op": "add", "key": key, "title": title, "type": "epic",
+                "labels": labels, "body": text, "properties": {ANNOTATION_OWNER: value}},
+               {"op": "update", "id": ref, "title": title, "body": text},
+               {"op": "property", "id": ref, "owner": ANNOTATION_OWNER, "value": value}]
+        current = call(self._anchor(st), ["show", existing])["status"] if existing else "todo"
+        if current != "needs_decision":
+            if current in DONE or current == "cancelled":
+                ops.append({"op": "reopen", "id": ref})
+            ops.append({"op": "transition", "id": ref, "name": "escalate" if current == "blocked" else "ask",
+                        "by": holder(run_id)})
+        user_ref = st.get("ref")
+        if user_ref and user_ref != existing:
+            try:
+                user_issue = call(self._anchor(st), ["show", user_ref])
+            except OrbitStoreError as error:
+                if error.code != "NOT_FOUND":
+                    raise
+            else:
+                ops.append({"op": "link", "id": ref, "type": "relates-to", "to": user_issue["id"],
+                            "blocking": False})
+        return ops
 
     def publish_spec(self, run_dir, st: dict, title: str, body: str) -> dict:
-        """Publish the spec as the run's epic spec Task; republishing rewrites it."""
-        anchor = Path(self._anchor(st))
-        depth = _max_depth(anchor)
-        if depth is not None and depth < 2:
-            raise OrbitStoreError("INVALID_ARGUMENT",
-                                  "the Board nests SubTasks one level deep, but "
-                                  "the spec Task holds slices and their tickets "
-                                  f"(board.max_subtask_depth is {depth})",
-                                  DEPTH_FIX)
         keys = self._batch(st, self.spec_ops(run_dir, st, title, body)).get("keys", {})
         ref = keys[source_key(st["run_id"], "spec")]
         self.config["spec_task"] = ref
         return {"ref": ref, "published": True}
 
     def sync_spec(self, run_dir, st: dict, event: str) -> None:
-        """Mirror a spec lifecycle event on the spec Task: the gate closing clears
-        `waiting_on` and the `phase` Annotation tracks the run. The spec Task is
-        closed by _close_slices, in the Batch that finishes the last slice."""
+        self._resume_pending(st)
         spec_id = self._spec_id(st)
         if not spec_id:
             return
         phase = SPEC_PHASES.get(event)
         if phase is None:
-            raise OrbitStoreError(
-                "INVALID_ARGUMENT", f"unknown spec sync event '{event}'",
-                "expected one of: " + ", ".join(sorted(SPEC_PHASES)))
-        self._batch(st, [
-            {"op": "update", "id": spec_id, "clear_waiting": True},
-            {"op": "annotate", "id": spec_id, "owner": ANNOTATION_OWNER,
-             "value": {"role": "spec", "run": st["run_id"], "phase": phase}},
-        ])
+            raise OrbitStoreError("INVALID_ARGUMENT", f"unknown spec sync event '{event}'",
+                                  "expected one of: " + ", ".join(sorted(SPEC_PHASES)))
+        current = call(self._anchor(st), ["show", spec_id])["status"]
+        ops = []
+        if event in ("gate-approved", "building") and current == "needs_decision":
+            ops.append({"op": "transition", "id": spec_id, "name": "answer", "by": holder(st["run_id"])})
+            current = "todo"
+        if event == "building" and current == "todo":
+            ops.append({"op": "transition", "id": spec_id, "name": "claim",
+                        "by": holder(st["run_id"])})
+        ops.append({"op": "property", "id": spec_id, "owner": ANNOTATION_OWNER,
+                    "value": {"role": "spec", "run": st["run_id"], "phase": phase}})
+        self._batch(st, ops)
 
     def publish(self, run_dir, st: dict) -> dict:
-        """Send every staged ticket (and new slices) in one Batch; returns provisional -> Task ID."""
+        """Publish staged Issues, then apply active statuses using resolved identities."""
+        self._resume_pending(st)
         staged = self._staged(run_dir)
         if not staged:
             return {}
@@ -517,6 +730,13 @@ class OrbitTicketStore:
                                    st.get("ticket_aliases") or {})
         keys = self._batch(st, ops).get("keys", {})
         mapping = {pid: keys[source_key(run_id, pid)] for pid in [*new_slices, *order]}
+        transitions = []
+        for pid in order:
+            if staged[pid].get("status", "todo") != "todo":
+                tid = mapping[pid]
+                current = to_ticket(call(self._anchor(st), ["show", tid]))
+                transitions += ops_for(tid, current, _rewrite(staged[pid], mapping), run_id, self._names(st))
+        self._batch(st, transitions)
         self.config["published"] = True
         self.config["published_slices"] = sorted(done_slices | {mapping[s] for s in new_slices})
         # The Board now holds them; a save lost after this point heals on the next read.
@@ -525,87 +745,261 @@ class OrbitTicketStore:
             (Path(run_dir) / "issues" / f"{pid}.md").unlink(missing_ok=True)
         return mapping
 
+    def record_verify(self, run_dir, st: dict, ticket_id: str, evidence: dict) -> None:
+        self._resume_pending(st)
+        if ticket_id in self._staged(run_dir):
+            return
+        # Orbit reserves evidence for submit; keep failed and pre-submit verify here.
+        self._batch(st, [{"op": "property", "id": ticket_id, "owner": "kinetic-verify", "value": evidence}])
+
+    def submit_review(self, run_dir, st: dict, ticket_id: str, evidence: list,
+                      scope: str = "ticket") -> None:
+        self._resume_pending(st)
+        if scope not in ("ticket", "fix", "integration"):
+            raise ValueError("review scope must be ticket, fix or integration")
+        if not evidence or any(e.get("exit_code") != 0 for e in evidence):
+            raise ValueError("review requires a passing verify for every reviewed repo")
+        issue = call(self._anchor(st), ["show", ticket_id])
+        if issue["status"] == "in_review":
+            if (issue.get("properties") or {}).get("kinetic-reviews", {}).get("scope") != scope:
+                raise ValueError("submitted review has a different scope")
+            return
+        restarting = scope == "integration" and issue["status"] == "todo"
+        if issue["status"] != "running" and not restarting:
+            raise ValueError("submit review requires running work")
+        role = "orchestrator" if scope == "integration" else "implementer"
+        by = holder(st["run_id"], None if scope == "integration" else ticket_id, role)
+        operations = [{"op": "transition", "id": ticket_id, "name": "claim", "by": by}] if restarting else []
+        self._batch(st, [*operations,
+            {"op": "submit", "id": ticket_id, "by": by,
+             "command": [e["command"] for e in evidence if e.get("command")],
+             "exit_code": 0, "file": [e["log_path"] for e in evidence]},
+            {"op": "property", "id": ticket_id, "owner": "kinetic-reviews",
+             "value": {"scope": scope, "verdicts": {}}},
+        ])
+
+    def record_review(self, run_dir, st: dict, ticket_id: str, axis: str,
+                      verdict: str, reason: str = "") -> None:
+        self._resume_pending(st)
+        if axis not in ("spec", "standards", "fix", "integration"):
+            raise ValueError("review axis must be spec, standards, fix or integration")
+        if verdict not in ("approve", "request-changes"):
+            raise ValueError("review verdict must be approve or request-changes")
+        if verdict == "request-changes" and not reason.strip():
+            raise ValueError("request-changes requires a reason")
+        issue = call(self._anchor(st), ["show", ticket_id])
+        record = dict((issue.get("properties") or {}).get("kinetic-reviews") or {})
+        verdicts = dict(record.get("verdicts") or {})
+        by = holder(st["run_id"], None if axis == "integration" else ticket_id, axis + "-reviewer")
+        outcome = {"verdict": verdict, "reason": reason, "by": by}
+        if verdicts.get(axis) == outcome:
+            return
+        if issue["status"] != "in_review":
+            raise ValueError("record review requires submitted work")
+        expected_axes = {"ticket": ("spec", "standards"), "fix": ("fix",), "integration": ("integration",)}
+        if axis not in expected_axes.get(record.get("scope"), ()):
+            raise ValueError("review axis does not match the submitted scope")
+        verdicts[axis] = outcome
+        record["verdicts"] = verdicts
+        operations = [{"op": "property", "id": ticket_id, "owner": "kinetic-reviews", "value": record}]
+        approved = (axis in ("fix", "integration") or
+                    all(verdicts.get(a, {}).get("verdict") == "approve" for a in ("spec", "standards")))
+        if verdict == "request-changes" or approved:
+            operations.append({"op": "review", "id": ticket_id, "verdict": verdict,
+                               "reason": reason or None,
+                               "by": by})
+            if verdict == "approve" and axis != "integration":
+                before = st.get("tickets", {})
+                after = {**before, ticket_id: {**before.get(ticket_id, {}), "status": "done"}}
+                operations.extend(self._close_slices(st, self._staged(run_dir), before, after))
+        self._batch(st, operations)
+
     def touch(self, run_dir, st: dict, ticket_id: str) -> None:
-        call(self._anchor(st), ["heartbeat", ticket_id, "--by", holder(st["run_id"])])
+        self._resume_pending(st)
+        anchor = self._anchor(st)
+        issue = call(anchor, ["show", ticket_id])
+        who = holder(st["run_id"], ticket_id, "implementer")
+        if issue.get("status") == "running" and issue.get("assignee") == who:
+            self._batch(st, [{"op": "heartbeat", "id": ticket_id, "by": who}])
 
     def health(self, settings: Path) -> list:
-        """Doctor rows: binary with Batches, Board found, export schema, hold label."""
+        """Doctor checks the contract and native profile through Orbit's handshake."""
         import shutil
         from kinetic import tracker
 
         def row(name, status, fix=""):
             return {"name": name, "status": status, "fix": fix}
 
+        if not shutil.which("orbit"):
+            return [row("orbit-binary", "fail", f"install orbit {MIN_ORBIT} or later")]
         resolved = tracker.resolve(settings=settings)
         anchor = Path(resolved["settings"].get("orbit_dir") or Path(settings).parent.parent).expanduser()
-        hold = resolved["names"]["hold"]
-        install = f"install orbit with Batches and Annotations ({MIN_ORBIT} or later)"
-        later = "fix orbit-binary first"
-        if not shutil.which("orbit") or subprocess.run(
-                ["orbit", "batch", "--help"], capture_output=True).returncode != 0:
-            return [row("orbit-binary", "fail", install), row("orbit-board", "fail", later),
-                    row("orbit-schema", "fail", later), row("orbit-depth", "fail", later),
-                    row("orbit-hold-label", "warn", later)]
         out = [row("orbit-binary", "pass")]
         try:
-            schema = call(str(anchor), ["export"]).get("schema_version")
-        except OrbitStoreError:
-            fix = "set tracker_settings.orbit_dir or run orbit init in the repo"
-            return out + [row("orbit-board", "fail", fix),
-                          row("orbit-schema", "fail", "fix orbit-board first"),
-                          row("orbit-depth", "fail", "fix orbit-board first"),
-                          row("orbit-hold-label", "warn", "fix orbit-board first")]
-        out.append(row("orbit-board", "pass"))
-        out.append(row("orbit-schema", "pass") if schema == SCHEMA_VERSION else
-                   row("orbit-schema", "fail",
-                       f"orbit export schema_version is {schema}, kinetic needs {SCHEMA_VERSION}"))
-        depth = _max_depth(anchor)
-        if depth is None:
-            out.append(row("orbit-depth", "warn",
-                           "could not read the Board's config.toml"))
-        else:
-            out.append(row("orbit-depth", "pass") if depth >= 2 else
-                       row("orbit-depth", "fail", DEPTH_FIX))
-        out.append(row("orbit-hold-label", "pass") if hold in _hold_labels(anchor) else
-                   row("orbit-hold-label", "warn",
-                       f'add "{hold}" to non_ready_labels in the Board\'s config.toml'))
+            data = negotiate(str(anchor))
+        except OrbitStoreError as error:
+            return out + [row("orbit-contract", "fail", str(error))]
+        out += [row("orbit-board", "pass"), row("orbit-contract", "pass"),
+                row("orbit-capabilities", "pass")]
+        statuses = {status["name"] for status in (data.get("workflow") or {}).get("statuses", [])}
+        missing = sorted(NATIVE_STATUSES - statuses)
+        fix = "run kinetic install --harness <your harness>, then orbit setup kinetic in the Board"
+        if missing:
+            fix += "; missing statuses: " + ", ".join(missing)
+        out.append(row("orbit-profile", "pass") if not missing and "kinetic" in data.get("profiles", [])
+                   else row("orbit-profile", "fail", fix))
         return out
 
 
-def _config_candidates(anchor: Path) -> list:
-    """Wherever the Board layout keeps its config.toml."""
-    return [anchor / ".orbit" / "board" / "config.toml", anchor / ".orbit" / "config.toml",
-            anchor / "config.toml"]
+def _toml(value):
+    if isinstance(value, dict):
+        return "{ " + ", ".join(f"{key} = {_toml(item)}" for key, item in value.items()
+                                  if item is not None) + " }"
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml(item) for item in value) + "]"
+    return json.dumps(value)
 
 
-def _config_texts(anchor: Path):
-    """The text of each existing, readable config.toml candidate."""
-    for candidate in _config_candidates(anchor):
-        if candidate.is_file():
-            try:
-                yield candidate.read_text()
-            except OSError:
-                continue
+def _migration_profile(workflow: dict, temporary: bool) -> str:
+    """Retain unrelated legacy states and their routes while adding native workflow."""
+    try:
+        import tomllib
+    except ImportError:  # stdlib since Python 3.11; kinetic itself still runs on 3.9
+        raise OrbitStoreError("PYTHON_TOO_OLD", "applying a run migration needs Python 3.11 or later",
+                              "run the migration with python3.11+ (preview works on any version)")
+    from kinetic.tracker import ROOT
+    text = (ROOT / "profiles" / "kinetic.toml").read_text()
+    native = tomllib.loads(text)["workflow"]
+    states = {item["name"]: item for item in native["statuses"]}
+    for item in workflow["statuses"]:
+        states.setdefault(item["name"], {**item, "ready": False})
+    transitions = {item["name"]: item for item in native["transitions"]}
+    for item in workflow["transitions"]:
+        if item["name"].startswith("kinetic_migrate_"):
+            continue
+        item = {key: value for key, value in item.items() if value is not None}
+        name = item["name"]
+        if name in transitions and transitions[name] != item:
+            item = {**item, "name": "legacy_" + name}
+        transitions.setdefault(item["name"], item)
+    if temporary:
+        for target in sorted(NATIVE_STATUSES):
+            transitions["kinetic_migrate_" + target] = {
+                "name": "kinetic_migrate_" + target,
+                "from": sorted(set(states) - {target}), "to": target,
+                **({"resolution": "completed"} if target in DONE else {})}
+    section = "[workflow]\ninitial = \"todo\"\n"
+    section += "statuses = " + _toml(list(states.values())) + "\n"
+    section += "transitions = " + _toml(list(transitions.values())) + "\n\n"
+    return re.sub(r"\[workflow\]\n.*?(?=\[\[policy.rules\]\])", lambda _: section, text, flags=re.S)
 
 
-def _max_depth(anchor: Path) -> int | None:
-    """board.max_subtask_depth (Orbit's default is 1); None when no config is readable."""
-    saw_config = False
-    for text in _config_texts(anchor):
-        saw_config = True
-        m = re.search(r"max_subtask_depth\s*=\s*(\d+)", text)
-        if m:
-            return int(m.group(1))
-    return 1 if saw_config else None
+def migrate(run_dir, apply: bool = False) -> dict:
+    """Explicitly convert one run's legacy fields, preserving all Issue IDs."""
+    from kinetic import state
+    st = state.load(run_dir, tickets=False)
+    if (st.get("ticket_store") or {}).get("kind") != "orbit":
+        raise OrbitStoreError("INVALID_ARGUMENT", "this run does not use the Orbit ticket store")
+    store = make(st["ticket_store"]["config"])
+    anchor = store._anchor(st)
+    capability = negotiate(anchor)
+    if apply:
+        store._resume_pending(st)
+    workflow = capability.get("workflow")
+    if not workflow:
+        raise OrbitStoreError("INVALID_ARGUMENT", "the Board workflow cannot be resolved",
+                              "repair the Board workflow before migrating")
+    issues, cursor = [], None
+    while True:
+        args = ["list", "--all", "--include-closed", "--label", run_label(st["run_id"], store._names(st))]
+        if cursor:
+            args += ["--cursor", cursor]
+        page = call(anchor, args)
+        issues += page.get("issues", [])
+        cursor = page.get("next_cursor")
+        if not cursor:
+            break
+    operations, migrated = [], []
+    for issue in sorted(issues, key=lambda item: item.get("depth", 0), reverse=True):
+        metadata = ((issue.get("properties") or {}).get(ANNOTATION_OWNER)
+                    or (issue.get("annotations") or {}).get(ANNOTATION_OWNER) or {})
+        if "status" not in metadata and issue["status"] in NATIVE_STATUSES:
+            continue
+        if not metadata and not _is_slice(issue, run_label(st["run_id"], store._names(st))):
+            continue
+        metadata = dict(metadata)
+        if _is_slice(issue, run_label(st["run_id"], store._names(st))):
+            metadata["role"] = "slice"
+        legacy = {"ready": "todo", "in_progress": "running", "needs_human": "needs_decision"}
+        target = metadata.get("status", legacy.get(issue["status"], issue["status"]))
+        if metadata.get("role") == "spec" and metadata.get("phase") == "awaiting-approval":
+            target = "needs_decision"
+        tid = issue["id"]
+        if target not in NATIVE_STATUSES:
+            raise OrbitStoreError("INVALID_ARGUMENT", f"{tid} has unknown legacy status {target}")
+        migrated.append(tid)
+        for (kind, field, value), attributes in _links(metadata, st["run_id"]).items():
+            existing = next((link for link in issue.get("links", [])
+                             if link["type"] == kind and link.get("target") == value), None)
+            if existing:
+                if (existing.get("attributes") or {}) == attributes["attributes"]:
+                    continue
+                operations.append({"op": "unlink", "id": tid, "type": kind, field: value})
+            operations.append({"op": "link", "id": tid, "type": kind, field: value, **attributes})
+        if issue["status"] != target:
+            operations.append({"op": "transition", "id": tid, "name": "kinetic_migrate_" + target,
+                               "by": issue.get("assignee") or holder(st["run_id"])})
+        old_labels = set(issue.get("labels", []))
+        obsolete = {"kinetic", store._names(st).get("hold", "kinetic")}
+        if metadata.get("ships_with"):
+            obsolete.add("ships-with-" + metadata["ships_with"])
+        if old_labels & obsolete:
+            operations.append({"op": "label", "id": tid, "remove": sorted(old_labels & obsolete)})
+        operations.append({"op": "property", "id": tid, "owner": ANNOTATION_OWNER,
+                           "value": _property_fields(metadata)})
+        if (target == "running" and metadata.get("kind", "agent") != "human"
+                and metadata.get("role") not in ("spec", "slice")):
+            operations.append({"op": "claim", "id": tid,
+                               "by": holder(st["run_id"], tid, "implementer"), "steal": True})
+    result = {"applied": False, "migrated": migrated, "operations": operations,
+              "workflow": "native kinetic with existing legacy states and legacy_ transition aliases"}
+    if not apply:
+        return result
+    # Keep profile sources in the run so Orbit's applied-profile pointers remain valid.
+    profile = state.internal(run_dir) / "orbit-profile.toml"
+    temporary = state.internal(run_dir) / "orbit-migration.toml"
+    state.atomic_write(profile, _migration_profile(workflow, temporary=False))
+    if operations:
+        state.atomic_write(temporary, _migration_profile(workflow, temporary=True))
+        call(anchor, ["setup", str(temporary)])
+        try:
+            store._batch(st, operations)
+        finally:
+            call(anchor, ["setup", str(profile)])
+    else:
+        call(anchor, ["setup", str(profile)])
+    (state.internal(run_dir) / "orbit-feed.json").unlink(missing_ok=True)
+    store.config.pop("needs_migration", None)
+    state.save(run_dir, st)
+    result["applied"] = True
+    return result
 
 
-def _hold_labels(anchor: Path) -> list:
-    """non_ready_labels from the Board's config.toml, wherever the layout keeps it."""
-    for text in _config_texts(anchor):
-        m = re.search(r"non_ready_labels\s*=\s*\[(.*?)\]", text, re.S)
-        if m:
-            return re.findall(r'"([^"]+)"', m.group(1))
-    return []
+def main(argv=None) -> int:
+    import argparse
+    import sys
+    parser = argparse.ArgumentParser(prog="kinetic orbit_store")
+    sub = parser.add_subparsers(dest="command", required=True)
+    migration = sub.add_parser("migrate", help="preview migration of one existing run to native Issues")
+    migration.add_argument("--run", required=True)
+    migration.add_argument("--apply", action="store_true", help="apply the previewed workflow and Issue changes")
+    args = parser.parse_args(argv)
+    try:
+        print(json.dumps(migrate(args.run, args.apply)))
+    except (OrbitStoreError, ValueError, OSError, KeyError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    return 0
 
 
 def make(config: dict) -> OrbitTicketStore:

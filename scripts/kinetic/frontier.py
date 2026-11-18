@@ -9,7 +9,7 @@ from kinetic import graph, state
 DONE = {"done", "done_with_concerns", "merged", "released"}
 MERGED = {"merged", "released"}
 # the orchestrator keeps these tickets' implementer and worktree alive
-OCCUPYING = {"running", "needs_decision", "blocked"}
+OCCUPYING = {"running", "needs_decision", "blocked", "in_review"}
 
 
 def _human(t: dict) -> bool:
@@ -35,7 +35,7 @@ def ready(st: dict, cap: int = 3) -> list[str]:
         order = graph.topo_order(tickets)
     except ValueError:
         return []  # cycle: the graph validator reports it, never dispatch into it
-    running = [t for t in tickets.values() if t["status"] == "running"]
+    running = [t for t in tickets.values() if t["status"] in ("running", "in_review")]
     busy = {t["repo"] for t in tickets.values() if t["status"] in OCCUPYING}
     out = []
     for i in order:

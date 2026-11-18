@@ -49,12 +49,16 @@ The per-tracker instructions (GitHub, Jira, Linear, local, Orbit, other) that te
 _Avoid_: Adapter (unqualified), integration
 
 **Ticket store**:
-Where a run's tickets and its spec live, behind one interface that `state.py` reads and writes through: the local ticket store (`state.json` for tickets, `spec.md` for the spec) for most trackers, or the Orbit ticket store (Tasks on an Orbit Board) for the `orbit` tracker.
+Where a run's tickets and its spec live, behind one interface that `state.py` reads and writes through: the local ticket store (`state.json` for tickets, `spec.md` for the spec) for most trackers, or the Orbit ticket store (Issues on an Orbit Board) for the `orbit` tracker.
 _Avoid_: Adapter, backend, board
 
-**Spec Task**:
-The Task the Orbit ticket store publishes a run's spec as: a top-level Task of type `epic` that the run's slices nest under, so `orbit list --type epic` is the one place for every spec and `orbit tree` shows spec, slices and tickets. Its `kinetic` Annotation (`{"role": "spec", "run": ..., "phase": ...}`) mirrors the spec gate.
-_Avoid_: Epic (unqualified), spec issue
+**Spec Issue**:
+The owned, top-level Issue of type `epic` that the Orbit ticket store publishes for a run. Slices are `task` Issues beneath it and tickets are `sub-task` Issues beneath slices. Its `kinetic` Property (`{"role": "spec", "run": ..., "phase": ...}`) records the spec gate. An existing user Issue is linked without changing its lifecycle.
+_Avoid_: Spec Task, epic (unqualified)
+
+**Property**:
+Structured execution metadata in the `kinetic` namespace on an Orbit Issue. Native status, hierarchy, assignee, lease and typed links remain authoritative in their own fields.
+_Avoid_: Annotation, status mirror
 
 ## Repos
 

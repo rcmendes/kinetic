@@ -1330,9 +1330,28 @@ def main(argv=None) -> int:
     if err:
         print(f"kinetic install: {err}", file=sys.stderr)
         return 1
+    # Orbit discovers user profiles by name from this directory.
+    profile_path = home / ".config" / "orbit" / "profiles" / "kinetic.toml"
+    try:
+        generated = {profile_path: (clone / "profiles" / "kinetic.toml").read_text()}
+    except OSError as e:
+        print(f"kinetic install: {e}", file=sys.stderr)
+        return 1
+    manifest_path = _manifest_path(home, a.harness)
+    prev = _read_manifest(manifest_path) or {}
+    if _check_no_clobber(generated, prev.get("files") or {}) != 0:
+        return 1
     installers = {"claude": _install_claude, "devin": _install_devin,
                   "codex": _install_codex, "opencode": _install_opencode}
-    return installers[a.harness](clone, home)
+    rc = installers[a.harness](clone, home)
+    if rc == 0:
+        _write_generated_files(generated)
+        manifest = _read_manifest(manifest_path)
+        manifest["files"][str(profile_path)] = {
+            "type": "file", "sha256": _hash_file(profile_path)}
+        atomic_write(manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        print(f"Orbit profile: {profile_path}; run `orbit setup kinetic` in the Board")
+    return rc
 
 
 if __name__ == "__main__":

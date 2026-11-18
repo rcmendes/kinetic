@@ -363,6 +363,8 @@ def touch_ticket(inp) -> None:
     tool call's cwd is alive, at most once per TOUCH_INTERVAL per worktree.
     The stamp is checked before any ticket read, so most calls cost one stat.
     Never raises: a failed touch is one stderr line."""
+    if str(inp.get("agent_type") or "").endswith("reviewer"):
+        return
     try:
         import hashlib
         import time
