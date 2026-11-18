@@ -28,5 +28,6 @@ Use Orbit 0.11.0 or later with contract 1. Scripted checks run with
 
 | Date | Harness | Orbit version | Steps passed | Notes |
 |---|---|---|---|---|
+| 2026-11-18 | none: scripted drive of kinetic's public API (`docs/smoke/orbit_live.py`) | 0.11.0 | Fresh Board steps 1, 2, 4, 5, 6 (assignee only; no lease renewal), 7, 8 and 9 (resume only), with two repos, a merge edge, a human ticket, a request-changes round and a checkpoint. Spec epic `needs_decision`, then `todo` on approval; slice and tickets nested three levels; ticket `b` waited on `a` until merged; user Issue unchanged; integration review closed the spec. | No agent ran: the script is both implementer and reviewers. Not run: step 3 doctor rows, lease renewal by hooks, lost-response retry, version-conflict retry, `schedule-hints` strategies, existing-run migration. A run with a real harness is still open. |
 
 Scripted tests do not substitute for running an actual implementer and reviewer through a supported harness.
