@@ -94,11 +94,19 @@ class FeedTest(unittest.TestCase):
     def test_new_store_instance_resumes_durable_snapshot_and_fetches_changes(self):
         self.store.read(self.run, self.st)
         self.issue['properties']['kinetic']['worktree'] = '/new'
-        self.events = [{'kind': 'issue.updated', 'issue': 'orb-a'}]
+        self.events = [{'type': 'issue.updated', 'issue': 'orb-a'}]
         restored = orbit_store.make(dict(self.store.config))
         self.assertEqual(restored.read(self.run, self.st)['orb-a']['worktree'], '/new')
         self.issue['labels'] = []
         self.assertEqual(restored.read(self.run, self.st), {})
+
+    def test_board_changed_event_triggers_a_full_refresh(self):
+        # Real Orbit names the event kind `type`, and a board.changed event names no Issue.
+        self.store.read(self.run, self.st)
+        self.issue['properties']['kinetic']['worktree'] = '/synced'
+        self.events = [{'type': 'board.changed'}]
+        restored = orbit_store.make(dict(self.store.config))
+        self.assertEqual(restored.read(self.run, self.st)['orb-a']['worktree'], '/synced')
 
     def test_policy_rejection_allows_a_corrected_write(self):
         before = self.store.read(self.run, self.st)

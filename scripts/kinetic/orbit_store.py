@@ -448,7 +448,7 @@ class OrbitTicketStore:
                 raise
             saved = None
             feed = call(anchor, ["changes"])
-        if saved is None or any(e.get("kind") == "board.changed" for e in feed["events"]):
+        if saved is None or any(e.get("type") == "board.changed" for e in feed["events"]):
             snapshot = {}
             cursor = None
             while True:
