@@ -5,8 +5,10 @@ Orbit contract 1.0.0 and the native workflow, policy, hierarchy, links,
 properties, assignee, lease, batch, idempotency and profiles capabilities.
 Index and hooks are optional Orbit modules.
 
-`kinetic install --harness <claude|codex|opencode|devin>` registers the profile
-at `~/.config/orbit/profiles/kinetic.toml`. It refuses to overwrite a foreign
+When `orbit` is on PATH, `kinetic install --harness <claude|codex|opencode|devin>`
+registers the profile at `~/.config/orbit/profiles/kinetic.toml`. An install
+without Orbit creates no profile; install Orbit and rerun the installer before
+applying the named profile. It refuses to overwrite a foreign
 or edited profile. Uninstall removes the registered file only if it still
 matches the installed content; the Board's applied workflow remains in place.
 

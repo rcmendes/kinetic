@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from kinetic import harness
+from kinetic import harness, ticket_store
 from kinetic.config import ConfigError, _load
 from kinetic.state import atomic_write
 
@@ -1330,10 +1330,8 @@ def main(argv=None) -> int:
     if err:
         print(f"kinetic install: {err}", file=sys.stderr)
         return 1
-    # Orbit discovers user profiles by name from this directory.
-    profile_path = home / ".config" / "orbit" / "profiles" / "kinetic.toml"
     try:
-        generated = {profile_path: (clone / "profiles" / "kinetic.toml").read_text()}
+        generated = ticket_store.installation_files(clone, home)
     except OSError as e:
         print(f"kinetic install: {e}", file=sys.stderr)
         return 1
@@ -1347,10 +1345,13 @@ def main(argv=None) -> int:
     if rc == 0:
         _write_generated_files(generated)
         manifest = _read_manifest(manifest_path)
-        manifest["files"][str(profile_path)] = {
-            "type": "file", "sha256": _hash_file(profile_path)}
+        # Keep ownership of optional files left in place when a store is unavailable.
+        for name, entry in (prev.get("files") or {}).items():
+            if Path(name).exists():
+                manifest["files"].setdefault(name, entry)
+        for path in generated:
+            manifest["files"][str(path)] = {"type": "file", "sha256": _hash_file(path)}
         atomic_write(manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-        print(f"Orbit profile: {profile_path}; run `orbit setup kinetic` in the Board")
     return rc
 
 

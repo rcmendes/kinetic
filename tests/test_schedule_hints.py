@@ -121,3 +121,12 @@ class OrbitHintsTest(unittest.TestCase):
     def test_a_ticket_orbit_does_not_list_keeps_its_place_after_the_listed_ones(self):
         self.assertEqual(self.store.hints(None, self.st, ["01-not-published", self.head]),
                          [self.head, "01-not-published"])
+
+    def test_touch_overlap_sorts_behind_safe_work_despite_longer_critical_path(self):
+        running = self.add("Running", "kinetic-run-hint-run")
+        self.orbit("property", "set", running, "touches", "--value", '{"paths":["src/shared"]}')
+        self.orbit("claim", running, "--by", "implementer")
+        self.orbit("property", "set", self.head, "touches", "--value", '{"paths":["src/shared/auth.py"]}')
+        self.orbit("property", "set", self.lone, "touches", "--value", '{"paths":["src/other.py"]}')
+        self.assertEqual(self.store.hints(None, self.st, [self.head, self.lone]),
+                         [self.lone, self.head])

@@ -294,6 +294,9 @@ def _check_fields(fields: dict) -> None:
     for k in ("after", "related"):
         if k in fields and not (isinstance(fields[k], list) and all(isinstance(x, str) for x in fields[k])):
             raise ValueError(f"{k} must be a list of strings")
+    if "touches" in fields and not (isinstance(fields["touches"], list)
+                                    and all(isinstance(x, str) and x.strip() for x in fields["touches"])):
+        raise ValueError("touches must be a list of non-empty path strings")
     if fields.get("ships_with") is not None and not isinstance(fields["ships_with"], str):
         raise ValueError("ships_with must be a string or null")
 

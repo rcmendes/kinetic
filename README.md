@@ -414,7 +414,7 @@ To rename any of these for your project, set `tracker_names` in the project conf
 
 ### Orbit: tickets on an Orbit Board
 
-The native Orbit workflow is shipped in `profiles/kinetic.toml`. `kinetic install --harness <name>` registers it with Orbit; run `orbit setup kinetic` at the Board anchor to apply it. See [the profile smoke check](docs/smoke/orbit-profile.md) for native statuses, review policy and setup verification. Applying the profile changes the Board workflow; migrate existing runs before switching them.
+The native Orbit workflow is shipped in `profiles/kinetic.toml`. `kinetic install --harness <name>` registers it when Orbit is on PATH; run `orbit setup kinetic` at the Board anchor to apply it. See [the profile smoke check](docs/smoke/orbit-profile.md) for native statuses, review policy and setup verification. Applying the profile changes the Board workflow; migrate existing runs before switching them.
 
 Orbit work stays `in_review` until both spec and standards review approve. `kinetic state submit-review` attaches passing verify evidence; `record-review` records independent verdicts and native fix attempts. Integration review targets the run's owned spec after full repo verifies.
 
