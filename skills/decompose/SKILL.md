@@ -114,6 +114,8 @@ kinetic state set-ticket --run <dir> --id <ticket-id> --field repo=<repo> --fiel
 
 Omit `produces` or `consumes` when the ticket has none. Add the new fields where they apply: `--field kind=human` (human ticket; leave out `repo` when it has none), `--field 'after=["<id>"]'`, `--field ships_with=<group>`, `--field 'related=["<id>"]'`.
 
+When expected edit paths are known, record them separately with `--field 'touches=["src/auth.py","tests/test_auth.py"]'`. Paths are relative to the ticket's repo; a directory covers its descendants. Keep them out of the ticket prose, and leave the field out when paths are unknown. Use `--field 'touches=[]'` to clear a declaration. A ticket store may use these paths to prefer candidates that do not overlap work already running; the existing pool cap and one-agent-per-repo rule still govern dispatch.
+
 In local mode, after writing each ticket file run `kinetic board header --run <dir> --id <ticket-id>` so its header matches state, and when all files are written `kinetic board render --run <dir>`. Do this before anything reads `board drift`: a hand-written file shows drift until its first `header`.
 
 Every slice id passed to `set-slices` must appear in at least one ticket's `slice` field. Do not edit `<dir>/.kinetic/state.json` by hand.

@@ -78,3 +78,7 @@ These names describe native links and statuses. Run/spec labels identify kinetic
   "spec": "kinetic-spec"
 }
 ```
+
+## Expected paths and scheduling
+
+Record `touches` as a list of repo-relative paths with `set-ticket`. The store writes the native `touches` Property as `{"paths": [...]}` when publishing and updating a ticket; it stays outside the `kinetic` Property. `[]` clears the declaration. Ready hints use `critical-path,touches`, placing candidates whose paths overlap assigned or in-review work behind safe candidates. Hints only reorder kinetic's ready tickets; the pool cap and per-repo dispatch exclusion remain in force. Tickets without declared paths keep their existing behavior.
