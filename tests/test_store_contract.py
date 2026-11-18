@@ -10,6 +10,7 @@ To add a store: subclass StoreContract with unittest.TestCase and implement
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shutil
@@ -139,6 +140,37 @@ class StoreContract:
         ready = [self.a, self.h]
         hinted = self.store().hints(self.run_dir, st, list(ready))
         self.assertEqual(sorted(hinted), sorted(ready))
+
+    def test_query_rollup_counts_the_runs_tickets(self):
+        self.need("query")
+        counts = self.store().rollup(self.run_dir, state.load(self.run_dir))
+        self.assertEqual(counts, {"done": 0, "blocked": 1, "open": 2, "cancelled": 0, "total": 3})
+        state.human_done(self.run_dir, self.h)
+        counts = self.store().rollup(self.run_dir, state.load(self.run_dir))
+        self.assertEqual(counts, {"done": 1, "blocked": 1, "open": 1, "cancelled": 0, "total": 3})
+
+    def test_query_changes_reports_what_changed_since_a_cursor(self):
+        self.need("query")
+        store = self.store()
+        first = store.changes(self.run_dir, state.load(self.run_dir), None)
+        self.assertEqual({self.a, self.b, self.h}, set(first["ids"]))
+        quiet = store.changes(self.run_dir, state.load(self.run_dir), first["cursor"])
+        self.assertEqual(quiet["ids"], [])
+        state.set_ticket(self.run_dir, self.a, status="running")
+        later = store.changes(self.run_dir, state.load(self.run_dir), quiet["cursor"])
+        self.assertIn(self.a, later["ids"])
+        self.assertTrue(set(later["ids"]) <= {self.a, self.b, self.h})
+
+    def test_idempotent_write_repeats_safely(self):
+        self.need("idempotent-write")
+        st = state.load(self.run_dir)
+        before = copy.deepcopy(st["tickets"])
+        after = copy.deepcopy(before)
+        after[self.a]["status"] = "running"
+        store = self.store()
+        store.write(self.run_dir, st, before, after)
+        store.write(self.run_dir, st, before, after)
+        self.assertEqual(self.tickets()[self.a]["status"], "running")
 
     def test_review_states_complete_a_verified_ticket(self):
         self.need("review-states")

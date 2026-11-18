@@ -20,8 +20,8 @@ class BareStore:
 
 
 class CapabilityTest(unittest.TestCase):
-    def test_local_store_has_no_capabilities(self):
-        self.assertEqual(ticket_store.LocalTicketStore().capabilities(), frozenset())
+    def test_local_store_declares_only_query(self):
+        self.assertEqual(ticket_store.LocalTicketStore().capabilities(), frozenset({"query"}))
 
     def test_has_is_false_for_a_store_without_the_capability(self):
         self.assertFalse(ticket_store.has(ticket_store.LocalTicketStore(), "review-states"))

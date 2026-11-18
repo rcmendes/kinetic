@@ -94,6 +94,39 @@ class Checkpoints(TicketStore, Protocol):
         """The latest handoff ({"progress", "next", "blocker", "by", "at"}) or None."""
 
 
+class Query(TicketStore, Protocol):
+    """The `query` capability: cheap reads over the run's tickets."""
+
+    def rollup(self, run_dir, st: dict) -> dict:
+        """{"done", "blocked", "open", "cancelled", "total"} over the run's tickets (slices and
+        the spec are not counted). Blocked: not done and waiting on an unfinished ticket."""
+
+    def changes(self, run_dir, st: dict, cursor: str | None) -> dict:
+        """{"cursor", "ids"}: ids of tickets that may have changed since `cursor`, and the
+        cursor to pass next time. `cursor=None` returns every ticket. A store that cannot
+        tell what changed may return every id; it must never leave a changed ticket out."""
+
+
+DONE_STATUSES = ("done", "done_with_concerns", "merged", "released")
+
+
+def tickets_rollup(tickets: dict) -> dict:
+    """The rollup counts for a ticket map; shared by stores that count tickets themselves."""
+    def finished(tid):
+        return (tickets.get(tid) or {}).get("status") in DONE_STATUSES
+    out = {"done": 0, "blocked": 0, "open": 0, "cancelled": 0, "total": len(tickets)}
+    for t in tickets.values():
+        if t.get("status") in DONE_STATUSES:
+            out["done"] += 1
+        elif t.get("status") == "cancelled":
+            out["cancelled"] += 1
+        elif any(not finished(e["id"]) for e in t.get("blocked_by") or []):
+            out["blocked"] += 1
+        else:
+            out["open"] += 1
+    return out
+
+
 class ScheduleHints(TicketStore, Protocol):
     """The `schedule-hints` capability: the store may suggest an order for ready tickets."""
 
@@ -125,7 +158,18 @@ class LocalTicketStore:
         return None
 
     def capabilities(self) -> frozenset:
-        return frozenset()
+        return frozenset({"query"})
+
+    def rollup(self, run_dir, st: dict) -> dict:
+        return tickets_rollup(st.get("tickets", {}))
+
+    def changes(self, run_dir, st: dict, cursor: str | None) -> dict:
+        # No history: the cursor is a digest of the tickets, so an unchanged run reports none.
+        import hashlib
+        import json
+        tickets = st.get("tickets", {})
+        digest = hashlib.sha256(json.dumps(tickets, sort_keys=True).encode()).hexdigest()
+        return {"cursor": digest, "ids": [] if cursor == digest else list(tickets)}
 
     def touch(self, run_dir, st: dict, ticket_id: str) -> None:
         return None
