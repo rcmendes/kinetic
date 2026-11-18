@@ -25,12 +25,10 @@ REQUIRED_CAPABILITIES = {"workflow", "policy", "issue-types", "hierarchy", "link
                          "assignee", "lease", "batch", "idempotency", "profiles", "setup"}
 NATIVE_STATUSES = {"todo", "running", "needs_decision", "blocked", "done_with_concerns",
                    "merged", "done", "released", "in_review", "cancelled"}
-DEPTH_FIX = "add max_subtask_depth = 2 under [board] in the Board's config.toml"
 DONE = ("done", "done_with_concerns", "merged", "released")
 PAUSED = ("needs_decision", "blocked")
-SPEC_WAITING = "kinetic: spec approval"  # set while the spec gate is open
 SPEC_GENERATED = "generated from spec.md; edit the file, then publish-spec again"
-# The spec Task's `phase` Annotation for each sync_spec event.
+# The owned spec Issue's phase Property for each sync_spec event.
 SPEC_PHASES = {"gate-approved": "approved", "gate-rejected": "revising",
                "building": "building"}
 # Keys read() adds that are not ticket fields and are never written back.
@@ -71,8 +69,6 @@ def call(anchor: str, args: list, stdin: str | None = None) -> dict:
 
 
 def _fix(code: str, message: str = "") -> str:
-    if code == "INVALID_ARGUMENT" and "board.max_subtask_depth" in message:
-        return DEPTH_FIX
     return {
         "LOCKED": "another orbit command holds the Board lock; retry",
         "BOARD_NOT_FOUND": "set tracker_settings.orbit_dir or run orbit init in the repo",
@@ -277,6 +273,11 @@ def to_ticket(task: dict) -> dict:
         return {}
     from kinetic.state import ticket_defaults
     t = {**ticket_defaults(), **metadata}
+    if "status" in metadata:
+        # Pre-native runs keep their authoritative ticket fields until explicit migration.
+        if t["status"] == "running":
+            t["liveness"] = "stuck" if _lapsed(task.get("lease_until")) else "alive"
+        return t
     t["status"] = task.get("status", t["status"])
     t["slice"] = task.get("parent", t["slice"])
     if task.get("assignee"):
@@ -507,6 +508,10 @@ class OrbitTicketStore:
         run_id, names = st["run_id"], self._names(st)
         label = run_label(run_id, names)
         tasks = self._issues(st)
+        self.config["needs_migration"] = any(
+            "status" in ((task.get("properties") or {}).get(ANNOTATION_OWNER)
+                         or (task.get("annotations") or {}).get(ANNOTATION_OWNER) or {})
+            or task.get("status") not in NATIVE_STATUSES for task in tasks)
         prefix = source_key(run_id, "")
         ids = {task["source_key"][len(prefix):]: task["id"] for task in tasks
                if (task.get("source_key") or "").startswith(prefix)
@@ -549,6 +554,9 @@ class OrbitTicketStore:
         return tickets
 
     def write(self, run_dir, st: dict, before: dict, after: dict) -> None:
+        if self.config.get("needs_migration"):
+            raise OrbitStoreError("MIGRATION_REQUIRED", "this run still has legacy ticket fields",
+                                  "run kinetic orbit_store migrate --run <run_dir> --apply")
         staged = self._staged(run_dir)
         run_id, names = st["run_id"], self._names(st)
         # After the first publish, a new ticket (a NEEDS_HUMAN ticket, a review fix)
@@ -812,7 +820,7 @@ class OrbitTicketStore:
         issue = call(anchor, ["show", ticket_id])
         who = holder(st["run_id"], ticket_id, "implementer")
         if issue.get("status") == "running" and issue.get("assignee") == who:
-            call(anchor, ["heartbeat", ticket_id, "--by", who])
+            self._batch(st, [{"op": "heartbeat", "id": ticket_id, "by": who}])
 
     def health(self, settings: Path) -> list:
         """Doctor checks the contract and native profile through Orbit's handshake."""
@@ -843,32 +851,151 @@ class OrbitTicketStore:
         return out
 
 
-def _config_candidates(anchor: Path) -> list:
-    """Wherever the Board layout keeps its config.toml."""
-    return [anchor / ".orbit" / "board" / "config.toml", anchor / ".orbit" / "config.toml",
-            anchor / "config.toml"]
+def _toml(value):
+    if isinstance(value, dict):
+        return "{ " + ", ".join(f"{key} = {_toml(item)}" for key, item in value.items()
+                                  if item is not None) + " }"
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml(item) for item in value) + "]"
+    return json.dumps(value)
 
 
-def _config_texts(anchor: Path):
-    """The text of each existing, readable config.toml candidate."""
-    for candidate in _config_candidates(anchor):
-        if candidate.is_file():
-            try:
-                yield candidate.read_text()
-            except OSError:
-                continue
+def _migration_profile(workflow: dict, temporary: bool) -> str:
+    """Retain unrelated legacy states and their routes while adding native workflow."""
+    import tomllib
+    from kinetic.tracker import ROOT
+    text = (ROOT / "profiles" / "kinetic.toml").read_text()
+    native = tomllib.loads(text)["workflow"]
+    states = {item["name"]: item for item in native["statuses"]}
+    for item in workflow["statuses"]:
+        states.setdefault(item["name"], {**item, "ready": False})
+    transitions = {item["name"]: item for item in native["transitions"]}
+    for item in workflow["transitions"]:
+        if item["name"].startswith("kinetic_migrate_"):
+            continue
+        item = {key: value for key, value in item.items() if value is not None}
+        name = item["name"]
+        if name in transitions and transitions[name] != item:
+            item = {**item, "name": "legacy_" + name}
+        transitions.setdefault(item["name"], item)
+    if temporary:
+        for target in sorted(NATIVE_STATUSES):
+            transitions["kinetic_migrate_" + target] = {
+                "name": "kinetic_migrate_" + target,
+                "from": sorted(set(states) - {target}), "to": target,
+                **({"resolution": "completed"} if target in DONE else {})}
+    section = "[workflow]\ninitial = \"todo\"\n"
+    section += "statuses = " + _toml(list(states.values())) + "\n"
+    section += "transitions = " + _toml(list(transitions.values())) + "\n\n"
+    return re.sub(r"\[workflow\]\n.*?(?=\[\[policy.rules\]\])", lambda _: section, text, flags=re.S)
 
 
-def _max_depth(anchor: Path) -> int | None:
-    """board.max_subtask_depth (Orbit's default is 1); None when no config is readable."""
-    saw_config = False
-    for text in _config_texts(anchor):
-        saw_config = True
-        m = re.search(r"max_subtask_depth\s*=\s*(\d+)", text)
-        if m:
-            return int(m.group(1))
-    return 1 if saw_config else None
+def migrate(run_dir, apply: bool = False) -> dict:
+    """Explicitly convert one run's legacy fields, preserving all Issue IDs."""
+    from kinetic import state
+    st = state.load(run_dir, tickets=False)
+    if (st.get("ticket_store") or {}).get("kind") != "orbit":
+        raise OrbitStoreError("INVALID_ARGUMENT", "this run does not use the Orbit ticket store")
+    store = make(st["ticket_store"]["config"])
+    anchor = store._anchor(st)
+    capability = negotiate(anchor)
+    if apply:
+        store._resume_pending(st)
+    workflow = capability.get("workflow")
+    if not workflow:
+        raise OrbitStoreError("INVALID_ARGUMENT", "the Board workflow cannot be resolved",
+                              "repair the Board workflow before migrating")
+    issues, cursor = [], None
+    while True:
+        args = ["list", "--all", "--include-closed", "--label", run_label(st["run_id"], store._names(st))]
+        if cursor:
+            args += ["--cursor", cursor]
+        page = call(anchor, args)
+        issues += page.get("issues", [])
+        cursor = page.get("next_cursor")
+        if not cursor:
+            break
+    operations, migrated = [], []
+    for issue in sorted(issues, key=lambda item: item.get("depth", 0), reverse=True):
+        metadata = ((issue.get("properties") or {}).get(ANNOTATION_OWNER)
+                    or (issue.get("annotations") or {}).get(ANNOTATION_OWNER) or {})
+        if "status" not in metadata and issue["status"] in NATIVE_STATUSES:
+            continue
+        if not metadata and not _is_slice(issue, run_label(st["run_id"], store._names(st))):
+            continue
+        metadata = dict(metadata)
+        if _is_slice(issue, run_label(st["run_id"], store._names(st))):
+            metadata["role"] = "slice"
+        legacy = {"ready": "todo", "in_progress": "running", "needs_human": "needs_decision"}
+        target = metadata.get("status", legacy.get(issue["status"], issue["status"]))
+        if metadata.get("role") == "spec" and metadata.get("phase") == "awaiting-approval":
+            target = "needs_decision"
+        tid = issue["id"]
+        if target not in NATIVE_STATUSES:
+            raise OrbitStoreError("INVALID_ARGUMENT", f"{tid} has unknown legacy status {target}")
+        migrated.append(tid)
+        for (kind, field, value), attributes in _links(metadata, st["run_id"]).items():
+            existing = next((link for link in issue.get("links", [])
+                             if link["type"] == kind and link.get("target") == value), None)
+            if existing:
+                if (existing.get("attributes") or {}) == attributes["attributes"]:
+                    continue
+                operations.append({"op": "unlink", "id": tid, "type": kind, field: value})
+            operations.append({"op": "link", "id": tid, "type": kind, field: value, **attributes})
+        if issue["status"] != target:
+            operations.append({"op": "transition", "id": tid, "name": "kinetic_migrate_" + target,
+                               "by": issue.get("assignee") or holder(st["run_id"])})
+        old_labels = set(issue.get("labels", []))
+        obsolete = {"kinetic", store._names(st).get("hold", "kinetic")}
+        if metadata.get("ships_with"):
+            obsolete.add("ships-with-" + metadata["ships_with"])
+        if old_labels & obsolete:
+            operations.append({"op": "label", "id": tid, "remove": sorted(old_labels & obsolete)})
+        operations.append({"op": "property", "id": tid, "owner": ANNOTATION_OWNER,
+                           "value": _property_fields(metadata)})
+        if (target == "running" and metadata.get("kind", "agent") != "human"
+                and metadata.get("role") not in ("spec", "slice")):
+            operations.append({"op": "claim", "id": tid,
+                               "by": holder(st["run_id"], tid, "implementer"), "steal": True})
+    result = {"applied": False, "migrated": migrated, "operations": operations,
+              "workflow": "native kinetic with existing legacy states and legacy_ transition aliases"}
+    if not apply:
+        return result
+    # Keep profile sources in the run so Orbit's applied-profile pointers remain valid.
+    profile = state.internal(run_dir) / "orbit-profile.toml"
+    temporary = state.internal(run_dir) / "orbit-migration.toml"
+    state.atomic_write(profile, _migration_profile(workflow, temporary=False))
+    if operations:
+        state.atomic_write(temporary, _migration_profile(workflow, temporary=True))
+        call(anchor, ["setup", str(temporary)])
+        try:
+            store._batch(st, operations)
+        finally:
+            call(anchor, ["setup", str(profile)])
+    else:
+        call(anchor, ["setup", str(profile)])
+    (state.internal(run_dir) / "orbit-feed.json").unlink(missing_ok=True)
+    store.config.pop("needs_migration", None)
+    state.save(run_dir, st)
+    result["applied"] = True
+    return result
 
+
+def main(argv=None) -> int:
+    import argparse
+    import sys
+    parser = argparse.ArgumentParser(prog="kinetic orbit_store")
+    sub = parser.add_subparsers(dest="command", required=True)
+    migration = sub.add_parser("migrate", help="preview migration of one existing run to native Issues")
+    migration.add_argument("--run", required=True)
+    migration.add_argument("--apply", action="store_true", help="apply the previewed workflow and Issue changes")
+    args = parser.parse_args(argv)
+    try:
+        print(json.dumps(migrate(args.run, args.apply)))
+    except (OrbitStoreError, ValueError, OSError, KeyError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    return 0
 
 
 def make(config: dict) -> OrbitTicketStore:

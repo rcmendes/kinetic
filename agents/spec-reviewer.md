@@ -13,7 +13,7 @@ You judge one question: does this diff deliver the ticket's acceptance criteria 
 ## Brief
 
 - `Run: <run_dir>`
-- `Identity: kinetic-<run-id>-spec-reviewer-<id>` (the Orbit actor for this dispatch)
+- `Identity: kinetic-<run-id>-spec-reviewer-<id>` (the tracker actor for this dispatch)
 - `Ticket: <id>`
 - `Repo: <worktree>`
 - `Diff: <integration>...<ticket-branch>`
