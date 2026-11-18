@@ -9,6 +9,8 @@ Tickets not yet published are staged in <run_dir>/.kinetic/tickets.staged.json.
 from __future__ import annotations
 
 import json
+import hashlib
+import uuid
 import re
 import subprocess
 import time
@@ -20,8 +22,11 @@ from kinetic.ticket_store import TicketStoreError
 ANNOTATION_OWNER = "kinetic"
 LOCK_RETRIES = (0.2, 0.4, 0.8)
 STAGED = "tickets.staged.json"
-SCHEMA_VERSION = 3  # orbit export schema with Annotations and Source Keys
-MIN_ORBIT = "0.10.16"  # Batches, Annotations and nested SubTasks (board.max_subtask_depth)
+MIN_ORBIT = "0.11.0"
+REQUIRED_CAPABILITIES = {"workflow", "policy", "issue-types", "hierarchy", "links", "properties",
+                         "assignee", "lease", "batch", "idempotency", "profiles", "setup"}
+NATIVE_STATUSES = {"todo", "running", "needs_decision", "blocked", "done_with_concerns",
+                   "merged", "done", "released", "in_review", "cancelled"}
 DEPTH_FIX = "add max_subtask_depth = 2 under [board] in the Board's config.toml"
 DONE = ("done", "done_with_concerns", "merged", "released")
 PAUSED = ("needs_decision", "blocked")
@@ -50,7 +55,7 @@ def call(anchor: str, args: list, stdin: str | None = None) -> dict:
             done = subprocess.run(cmd, input=stdin, capture_output=True, text=True, cwd=cwd)
         except FileNotFoundError:
             raise OrbitStoreError("NOT_INSTALLED", "the orbit command was not found",
-                                  f"install orbit with Batches and Annotations ({MIN_ORBIT} or later)")
+                                  f"install orbit {MIN_ORBIT} or later with contract 1 support")
         try:
             envelope = json.loads(done.stdout or "{}")
         except ValueError:
@@ -74,6 +79,23 @@ def _fix(code: str, message: str = "") -> str:
         "LOCKED": "another orbit command holds the Board lock; retry",
         "BOARD_NOT_FOUND": "set tracker_settings.orbit_dir or run orbit init in the repo",
     }.get(code, "")
+
+
+def negotiate(anchor: str) -> dict:
+    """Check the kernel contract; optional Board modules are not required."""
+    data = call(anchor, ["capabilities"])
+    board = data.get("board") or {}
+    versions = (data.get("contract", ""), board.get("contract", ""))
+    if (any(not re.fullmatch(r"1(?:\.\d+){0,2}", str(version)) for version in versions)
+            or board.get("compatible") is not True):
+        raise OrbitStoreError("CONTRACT_VERSION_UNSUPPORTED",
+                              f"kinetic needs Orbit contract 1; binary={versions[0]}, Board={versions[1]}",
+                              "upgrade orbit or migrate the Board to contract 1")
+    missing = sorted(REQUIRED_CAPABILITIES - set(data.get("capabilities") or []))
+    if missing:
+        raise OrbitStoreError("MISSING_CAPABILITIES", "missing required capabilities: " + ", ".join(missing),
+                              f"install orbit {MIN_ORBIT} or later with these capabilities")
+    return data
 
 
 def run_label(run_id: str, names: dict) -> str:
@@ -220,6 +242,7 @@ def _is_slice(task: dict, label: str) -> bool:
 class OrbitTicketStore:
     def __init__(self, config: dict):
         self.config = config
+        self._negotiated = False
 
     # -- configuration resolved on first use, then kept in state.json --
     @staticmethod
@@ -266,13 +289,101 @@ class OrbitTicketStore:
             settings = tracker.resolve(settings=proj / ".kinetic" / "config.json")["settings"]
             anchor = settings.get("orbit_dir") or proj
             self.config["anchor"] = str(Path(anchor).expanduser())
+        if not self._negotiated:
+            negotiate(self.config["anchor"])
+            self._negotiated = True
         return self.config["anchor"]
 
     def _batch(self, st: dict, operations: list) -> dict:
         if not operations:
             return {"keys": {}, "results": []}
-        return call(self._anchor(st), ["batch", "--file", "-"],
-                    stdin=json.dumps({"operations": operations}))
+        from kinetic.state import atomic_write, internal
+        anchor = self._anchor(st)
+        journal = internal(st["run_dir"]) / "orbit-write.json"
+        digest = hashlib.sha256(json.dumps(operations, sort_keys=True).encode()).hexdigest()
+        pending = json.loads(journal.read_text()) if journal.exists() else None
+        if pending and pending["digest"] != digest:
+            raise OrbitStoreError("PENDING_WRITE", "an interrupted Orbit write must be retried first")
+        if not pending:
+            cache = internal(st["run_dir"]) / "orbit-feed.json"
+            snapshot = json.loads(cache.read_text()).get("issues", {}) if cache.exists() else {}
+            versions = {}
+            guarded = []
+            for operation in operations:
+                op = dict(operation)
+                tid = op.get("id")
+                if tid and not tid.startswith("key:"):
+                    if tid not in versions:
+                        versions[tid] = snapshot.get(tid, {}).get("updated_at") or call(anchor, ["show", tid])["updated_at"]
+                    op["if_version"] = versions[tid]
+                guarded.append(op)
+            pending = {"digest": digest, "key": "kinetic-" + uuid.uuid4().hex,
+                       "operations": guarded}
+            atomic_write(journal, json.dumps(pending))
+        for attempt in range(3):
+            try:
+                result = call(anchor, ["batch", "--file", "-", "--idempotency-key", pending["key"]],
+                              stdin=json.dumps({"operations": pending["operations"]}))
+            except OrbitStoreError as error:
+                if error.code != "VERSION_CONFLICT" or attempt == 2:
+                    raise
+                # A rejected batch made no changes. Refresh guards before retrying;
+                # property writes remain scoped to kinetic's namespace.
+                versions = {op["id"]: call(anchor, ["show", op["id"]])["updated_at"]
+                            for op in pending["operations"] if "if_version" in op}
+                for op in pending["operations"]:
+                    if "if_version" in op:
+                        op["if_version"] = versions[op["id"]]
+                atomic_write(journal, json.dumps(pending))
+            else:
+                journal.unlink()
+                return result
+
+    def _issues(self, st: dict) -> list:
+        """Resume a durable feed snapshot; capture the cursor before the full read."""
+        from kinetic.state import atomic_write, internal
+        cache = internal(st["run_dir"]) / "orbit-feed.json"
+        anchor = self._anchor(st)
+        label = run_label(st["run_id"], self._names(st))
+        saved = json.loads(cache.read_text()) if cache.exists() else None
+        if saved and saved.get("anchor") != anchor:
+            saved = None
+        args = ["changes"] + (["--since", saved["cursor"]] if saved else [])
+        try:
+            feed = call(anchor, args)
+        except OrbitStoreError as error:
+            if not saved or error.code not in ("INVALID_ARGUMENT", "INVALID_CURSOR"):
+                raise
+            saved = None
+            feed = call(anchor, ["changes"])
+        if saved is None or any(e.get("kind") == "board.changed" for e in feed["events"]):
+            snapshot = {}
+            cursor = None
+            while True:
+                args = ["list", "--include-closed", "--all", "--label", label]
+                if cursor:
+                    args += ["--cursor", cursor]
+                page = call(anchor, args)
+                snapshot.update((issue["id"], issue) for issue in page.get("issues", []))
+                cursor = page.get("next_cursor")
+                if not cursor:
+                    break
+        else:
+            snapshot = saved["issues"]
+            for tid in {e["issue"] for e in feed["events"] if e.get("issue")}:
+                try:
+                    issue = call(anchor, ["show", tid])
+                except OrbitStoreError as error:
+                    if error.code != "NOT_FOUND":
+                        raise
+                    snapshot.pop(tid, None)
+                    continue
+                if label in issue.get("labels", []):
+                    snapshot[tid] = issue
+                else:
+                    snapshot.pop(tid, None)
+        atomic_write(cache, json.dumps({"anchor": anchor, "cursor": feed["cursor"], "issues": snapshot}))
+        return list(snapshot.values())
 
     # -- staged tickets --
     def stage_path(self, run_dir) -> Path:
@@ -304,9 +415,7 @@ class OrbitTicketStore:
             return {}  # nothing published before the run has a Board
         run_id, names = st["run_id"], self._names(st)
         label = run_label(run_id, names)
-        data = call(self._anchor(st), ["list", "--include-closed", "--all",
-                                       "--label", label])
-        tasks = data.get("tasks", [])
+        tasks = self._issues(st)
         prefix = source_key(run_id, "")
         ids = {task["source_key"][len(prefix):]: task["id"] for task in tasks
                if (task.get("source_key") or "").startswith(prefix)
@@ -529,46 +638,31 @@ class OrbitTicketStore:
         call(self._anchor(st), ["heartbeat", ticket_id, "--by", holder(st["run_id"])])
 
     def health(self, settings: Path) -> list:
-        """Doctor rows: binary with Batches, Board found, export schema, hold label."""
+        """Doctor checks the contract and native profile through Orbit's handshake."""
         import shutil
         from kinetic import tracker
 
         def row(name, status, fix=""):
             return {"name": name, "status": status, "fix": fix}
 
+        if not shutil.which("orbit"):
+            return [row("orbit-binary", "fail", f"install orbit {MIN_ORBIT} or later")]
         resolved = tracker.resolve(settings=settings)
         anchor = Path(resolved["settings"].get("orbit_dir") or Path(settings).parent.parent).expanduser()
-        hold = resolved["names"]["hold"]
-        install = f"install orbit with Batches and Annotations ({MIN_ORBIT} or later)"
-        later = "fix orbit-binary first"
-        if not shutil.which("orbit") or subprocess.run(
-                ["orbit", "batch", "--help"], capture_output=True).returncode != 0:
-            return [row("orbit-binary", "fail", install), row("orbit-board", "fail", later),
-                    row("orbit-schema", "fail", later), row("orbit-depth", "fail", later),
-                    row("orbit-hold-label", "warn", later)]
         out = [row("orbit-binary", "pass")]
         try:
-            schema = call(str(anchor), ["export"]).get("schema_version")
-        except OrbitStoreError:
-            fix = "set tracker_settings.orbit_dir or run orbit init in the repo"
-            return out + [row("orbit-board", "fail", fix),
-                          row("orbit-schema", "fail", "fix orbit-board first"),
-                          row("orbit-depth", "fail", "fix orbit-board first"),
-                          row("orbit-hold-label", "warn", "fix orbit-board first")]
-        out.append(row("orbit-board", "pass"))
-        out.append(row("orbit-schema", "pass") if schema == SCHEMA_VERSION else
-                   row("orbit-schema", "fail",
-                       f"orbit export schema_version is {schema}, kinetic needs {SCHEMA_VERSION}"))
-        depth = _max_depth(anchor)
-        if depth is None:
-            out.append(row("orbit-depth", "warn",
-                           "could not read the Board's config.toml"))
-        else:
-            out.append(row("orbit-depth", "pass") if depth >= 2 else
-                       row("orbit-depth", "fail", DEPTH_FIX))
-        out.append(row("orbit-hold-label", "pass") if hold in _hold_labels(anchor) else
-                   row("orbit-hold-label", "warn",
-                       f'add "{hold}" to non_ready_labels in the Board\'s config.toml'))
+            data = negotiate(str(anchor))
+        except OrbitStoreError as error:
+            return out + [row("orbit-contract", "fail", str(error))]
+        out += [row("orbit-board", "pass"), row("orbit-contract", "pass"),
+                row("orbit-capabilities", "pass")]
+        statuses = {status["name"] for status in (data.get("workflow") or {}).get("statuses", [])}
+        missing = sorted(NATIVE_STATUSES - statuses)
+        fix = "run kinetic install --harness <your harness>, then orbit setup kinetic in the Board"
+        if missing:
+            fix += "; missing statuses: " + ", ".join(missing)
+        out.append(row("orbit-profile", "pass") if not missing and "kinetic" in data.get("profiles", [])
+                   else row("orbit-profile", "fail", fix))
         return out
 
 
@@ -598,14 +692,6 @@ def _max_depth(anchor: Path) -> int | None:
             return int(m.group(1))
     return 1 if saw_config else None
 
-
-def _hold_labels(anchor: Path) -> list:
-    """non_ready_labels from the Board's config.toml, wherever the layout keeps it."""
-    for text in _config_texts(anchor):
-        m = re.search(r"non_ready_labels\s*=\s*\[(.*?)\]", text, re.S)
-        if m:
-            return re.findall(r'"([^"]+)"', m.group(1))
-    return []
 
 
 def make(config: dict) -> OrbitTicketStore:
