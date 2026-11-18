@@ -108,7 +108,7 @@ def _fields(t: dict) -> dict:
 
 
 def _property_fields(t: dict) -> dict:
-    native = {"status", "slice", "assignee", "blocked_by", "after", "related", "ships_with"}
+    native = {"status", "slice", "assignee", "blocked_by", "after", "related", "ships_with", "touches"}
     return {k: v for k, v in _fields(t).items() if k not in native}
 
 
@@ -215,6 +215,9 @@ def ops_for(tid: str, before: dict | None, after: dict, run_id: str, names: dict
         ops.append({"op": "label", "id": tid, "add": add, "remove": remove})
     if b["status"] != a["status"]:
         ops += _status_ops(tid, b["status"], a["status"], holder(run_id, tid, "implementer"))
+    if (before or {}).get("touches") != after.get("touches"):
+        ops.append({"op": "property", "id": tid, "owner": "touches",
+                    "value": {"paths": after.get("touches", [])}})
     ops.append({"op": "property", "id": tid, "owner": ANNOTATION_OWNER,
                 "value": _property_fields(after)})
     return ops
@@ -280,6 +283,9 @@ def to_ticket(task: dict) -> dict:
         return t
     t["status"] = task.get("status", t["status"])
     t["slice"] = task.get("parent", t["slice"])
+    touches = (task.get("properties") or {}).get("touches")
+    if isinstance(touches, dict):
+        t["touches"] = touches.get("paths", [])
     if task.get("assignee"):
         t["assignee"] = task["assignee"]
     t.update(blocked_by=[], after=[], related=[], ships_with=None)
@@ -840,9 +846,8 @@ class OrbitTicketStore:
         return {k: v for k, v in found.items() if v is not None} if found else None
 
     def hints(self, run_dir, st: dict, ready_ids: list) -> list:
-        """Order ready tickets by Orbit's critical path: the longest chain of open work
-        that waits on a ticket. Listing only; nothing is claimed."""
-        listed = call(self._anchor(st), ["ready", "--all", "--strategy", "critical-path",
+        """Prefer safe paths, then the longest critical path. Listing only; nothing is claimed."""
+        listed = call(self._anchor(st), ["ready", "--all", "--strategy", "critical-path,touches",
                                          "--label", run_label(st["run_id"], self._names(st)),
                                          "--limit", "1000"]).get("issues", [])
         rank = {issue["id"]: n for n, issue in enumerate(listed)}

@@ -77,3 +77,21 @@ class NativeLinksTest(unittest.TestCase):
                 state.set_ticket(run, ids["a"], status="done")
             self.assertEqual(caught.exception.code, "REVIEW_REQUIRED")
             self.assertEqual(orbit_json(board, "show", ids["a"])["status"], before)
+
+    def test_touch_paths_publish_update_and_roundtrip_as_native_property(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run, board = make_orbit_run(Path(tmp))
+            state.set_ticket(run, "a", repo="api", touches=["src/auth", "tests/test_auth.py"])
+            tid = state.publish_tickets(run)["a"]
+            shown = orbit_json(board, "show", tid)
+            self.assertEqual(shown["properties"]["touches"],
+                             {"paths": ["src/auth", "tests/test_auth.py"]})
+            self.assertNotIn("touches", shown["properties"]["kinetic"])
+            self.assertEqual(state.load(run)["tickets"][tid]["touches"],
+                             ["src/auth", "tests/test_auth.py"])
+            state.set_ticket(run, tid, touches=["src/session.py"])
+            self.assertEqual(orbit_json(board, "show", tid)["properties"]["touches"],
+                             {"paths": ["src/session.py"]})
+            self.assertEqual(state.load(run)["tickets"][tid]["touches"], ["src/session.py"])
+            state.set_ticket(run, tid, touches=[])
+            self.assertEqual(orbit_json(board, "show", tid)["properties"]["touches"], {"paths": []})
