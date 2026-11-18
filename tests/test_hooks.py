@@ -1380,6 +1380,14 @@ class TouchTicketTest(HookCase):
         self._common.touch_ticket(self.payload(self.wt))
         self.assertEqual(self.touched, ["01-api-a", "01-api-a"])
 
+    def test_reviewer_tool_calls_do_not_renew_the_implementer(self):
+        payload = self.payload(self.wt)
+        payload["agent_type"] = "spec-reviewer"
+        self._common.touch_ticket(payload)
+        self.assertEqual(self.touched, [])
+        self._common.touch_ticket(self.payload(self.wt))
+        self.assertEqual(self.touched, ["01-api-a"])
+
     def test_touch_failure_is_silent(self):
         from contextlib import redirect_stderr, redirect_stdout
         import io

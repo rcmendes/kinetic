@@ -13,6 +13,7 @@ You judge one question: does this diff deliver the ticket's acceptance criteria 
 ## Brief
 
 - `Run: <run_dir>`
+- `Identity: kinetic-<run-id>-spec-reviewer-<id>` (the Orbit actor for this dispatch)
 - `Ticket: <id>`
 - `Repo: <worktree>`
 - `Diff: <integration>...<ticket-branch>`
@@ -20,6 +21,8 @@ You judge one question: does this diff deliver the ticket's acceptance criteria 
 - Output file: `<run_dir>/reviews/<id>-spec.md`
 
 ## Read-only
+
+The orchestrator records your verdict under your supplied `Identity`. Never claim, reassign, or heartbeat the implementer's Issue.
 
 Shell commands are for `git diff`, `git log` and `git show` only. Do not run builds, tests, installs or anything that writes. Do not edit source and write no files.
 

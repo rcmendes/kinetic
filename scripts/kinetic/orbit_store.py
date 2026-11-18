@@ -102,8 +102,11 @@ def run_label(run_id: str, names: dict) -> str:
     return names["run"].replace("<run id>", run_id)
 
 
-def holder(run_id: str) -> str:
-    return f"kinetic-{run_id}"
+def holder(run_id: str, ticket_id: str | None = None, role: str = "orchestrator") -> str:
+    parts = [run_id, role, *([ticket_id] if ticket_id else [])]
+    if any(not re.fullmatch(r"[A-Za-z0-9_.-]+", part) for part in parts):
+        raise ValueError("Orbit identity parts must contain only letters, numbers, dots, underscores or hyphens")
+    return "kinetic-" + "-".join(parts)
 
 
 def _fields(t: dict) -> dict:
@@ -635,7 +638,11 @@ class OrbitTicketStore:
         return mapping
 
     def touch(self, run_dir, st: dict, ticket_id: str) -> None:
-        call(self._anchor(st), ["heartbeat", ticket_id, "--by", holder(st["run_id"])])
+        anchor = self._anchor(st)
+        issue = call(anchor, ["show", ticket_id])
+        who = holder(st["run_id"], ticket_id, "implementer")
+        if issue.get("status") == "running" and issue.get("assignee") == who:
+            call(anchor, ["heartbeat", ticket_id, "--by", who])
 
     def health(self, settings: Path) -> list:
         """Doctor checks the contract and native profile through Orbit's handshake."""
