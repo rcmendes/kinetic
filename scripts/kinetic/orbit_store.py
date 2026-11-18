@@ -479,7 +479,7 @@ class OrbitTicketStore:
 
     # -- staged tickets --
     def capabilities(self) -> frozenset:
-        return frozenset({"review-states"})
+        return frozenset({"review-states", "checkpoint"})
 
     def stage_path(self, run_dir) -> Path:
         from kinetic.state import internal
@@ -816,6 +816,28 @@ class OrbitTicketStore:
                 after = {**before, ticket_id: {**before.get(ticket_id, {}), "status": "done"}}
                 operations.extend(self._close_slices(st, self._staged(run_dir), before, after))
         self._batch(st, operations)
+
+    def checkpoint(self, run_dir, st: dict, ticket_id: str, progress: str,
+                   next: str | None = None, blocker: str | None = None) -> None:
+        """Record the handoff on the implementer's behalf: Orbit lets only the holder write it."""
+        self._resume_pending(st)
+        if ticket_id in self._staged(run_dir):
+            return
+        anchor = self._anchor(st)
+        who = holder(st["run_id"], ticket_id, "implementer")
+        if call(anchor, ["show", ticket_id]).get("assignee") != who:
+            raise ValueError(f"{ticket_id} is not held by its implementer, so it has no checkpoint to update")
+        args = ["checkpoint", ticket_id, "--by", who, "--progress", progress]
+        for flag, value in (("--next", next), ("--blocker", blocker)):
+            if value:
+                args += [flag, value]
+        call(anchor, args)
+
+    def last_checkpoint(self, run_dir, st: dict, ticket_id: str) -> dict | None:
+        if ticket_id in self._staged(run_dir):
+            return None
+        found = call(self._anchor(st), ["show", ticket_id]).get("checkpoint")
+        return {k: v for k, v in found.items() if v is not None} if found else None
 
     def touch(self, run_dir, st: dict, ticket_id: str) -> None:
         self._resume_pending(st)
