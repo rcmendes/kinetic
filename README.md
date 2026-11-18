@@ -38,19 +38,33 @@ It merges ideas from three plugins: Matt Pocock's skills (grill, spec, tickets, 
 
 ## Install
 
-Requirements: macOS or Linux, Python 3.9+, `git`, and `gh` authenticated to GitHub. Jira mode also needs the Atlassian MCP server; GitHub issues mode needs `gh` with issue access; Linear mode needs a Linear MCP server.
+Requirements: macOS or Linux, Python 3.9+, `git`, and `gh` authenticated to GitHub (`gh auth login`). Jira mode also needs the Atlassian MCP server; GitHub issues mode needs `gh` with issue access; Linear mode needs a Linear MCP server.
 
-Clone the repo first (every harness installs from a checkout, because `kinetic install` links the CLI and generates harness files from it):
+### 1. Clone and install (all harnesses)
+
+Every harness installs from a checkout, because `kinetic install` links the CLI and generates harness files from it:
 
 ```
-git clone git@github.com:rcmendes/kinetic.git ~/code/kinetic
+git clone git@github.com:apoema-ai/kinetic.git ~/code/kinetic
 ```
 
-Then install for your harness. Claude Code, via the repo's plugin marketplace (`.claude-plugin/marketplace.json`):
+Then run `kinetic install --harness <claude|devin|codex|opencode>` as described below. Every install:
+
+- links `kinetic` onto your PATH at `~/.local/bin/kinetic` (make sure `~/.local/bin` is on your PATH; the first run uses the full path `~/code/kinetic/bin/kinetic`);
+- records the harness and clone in `~/.config/kinetic/settings.json` (the last harness installed is the default for `kinetic doctor`);
+- writes `~/.config/kinetic/install-manifest-<harness>.json`, which `doctor` uses to detect staleness and `--uninstall` uses to remove exactly what was written.
+
+You can install for several harnesses side by side. After every `git pull`, re-run the install for each harness you use. To remove one: `kinetic install --harness <h> --uninstall`.
+
+Pass `--harness <h>` to `kinetic doctor` to check a harness other than the default.
+
+### 2. Claude Code
+
+Via the repo's plugin marketplace (`.claude-plugin/marketplace.json`):
 
 ```
 ~/code/kinetic/bin/kinetic install --harness claude
-claude plugin marketplace add rcmendes/kinetic
+claude plugin marketplace add apoema-ai/kinetic
 claude plugin install kinetic@kinetic
 ```
 
@@ -61,38 +75,93 @@ or, without the marketplace, load the checkout directly:
 claude --plugin-dir ~/code/kinetic
 ```
 
-Codex CLI, OpenCode and Devin have no kinetic marketplace; their installers below generate everything from the checkout.
+On Claude Code the installer only links the CLI and records settings; plugin registration (`claude plugin install` / `--plugin-dir`) stays manual. Skills appear as `/kinetic:<name>`.
 
-Devin CLI:
+### 3. Devin (CLI and desktop app)
+
+The Devin desktop app and the Devin CLI share the same plugin system and config (`~/.config/devin/config.json`), and the app bundles the CLI. The installer needs a `devin` command on PATH and a signed-in session.
+
+1. Put `devin` on PATH. If you installed the CLI separately, skip this. If you only have the desktop app (macOS), link its bundled CLI:
+
+   ```
+   ln -s /Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin ~/.local/bin/devin
+   devin --version
+   ```
+
+2. Sign in (plugin management refuses to run otherwise):
+
+   ```
+   devin auth login
+   ```
+
+3. Install:
+
+   ```
+   ~/code/kinetic/bin/kinetic install --harness devin
+   ```
+
+   The installer runs `devin plugins install --local ~/code/kinetic` itself. Devin shows a trust prompt listing kinetic's skills, hooks, rules and subagents; review it and approve (the installer deliberately does not pass `-y`). It also writes Devin-format hooks into the `hooks` key of `~/.config/devin/config.json`, preserving every foreign entry.
+
+4. Verify: `devin plugins list` shows `kinetic`, and `kinetic doctor --harness devin` reports `hooks-registered: pass`. In a Devin session, `/hooks` lists seven kinetic hooks and skills resolve as `/kinetic:<name>`.
+
+Devin support is best effort: plugin hooks fail open, so `kinetic doctor` reports which guarantees are only Instructed. It is unverified until `docs/smoke/devin.md` has been run (it also settles whether Devin double-registers the clone's `hooks/hooks.json`, which is cosmetic if so).
+
+### 4. Codex CLI
+
+Requires `codex-cli` 0.16x or newer (hooks are on by default).
+
+1. Install:
+
+   ```
+   ~/code/kinetic/bin/kinetic install --harness codex
+   ```
+
+   This is file generation only. It writes:
+   - `kntc-<name>` stub skills under `~/.agents/skills` (user-only skills get an `agents/openai.yaml` sidecar with `policy.allow_implicit_invocation: false`);
+   - agent definitions under `~/.codex/agents/*.toml`, with the tier resolved to `model` / `model_reasoning_effort` (override via `tiers.codex` in `~/.config/kinetic/settings.json`);
+   - kinetic's hooks merged into `~/.codex/hooks.json`, preserving foreign entries.
+
+2. **Trust the hooks.** Open Codex and run `/hooks`, review kinetic's seven hooks and trust them. They stay inactive until trusted, and `kinetic doctor --harness codex` fails its `hooks-trusted` check until Codex records the `trusted_hash` state.
+
+3. Verify: `kinetic doctor --harness codex` should show `hooks-registered`, `hooks-trusted`, `install-manifest` and `tier-mapping` all `pass`. Invoke skills explicitly as `$kntc-run`, `$kntc-init`, and so on.
+
+Known limitations: per-agent tool allow-lists are not honoured (the `tools:` frontmatter has no Codex agent equivalent), and the write-op/deploy confirmation hooks only fire on tool names matching `mcp__.*` patterns. Validated by `docs/smoke/codex.md`.
+
+### 5. OpenCode (CLI and desktop app)
+
+The `opencode` binary does not need to be on PATH: the installer file-drops its files, so it also works for the desktop app and version-managed installs.
+
+1. Install:
+
+   ```
+   ~/code/kinetic/bin/kinetic install --harness opencode
+   ```
+
+   It writes:
+   - flat `kntc-<name>.md` stub skills under `~/.config/opencode/skills` (user-only skills carry `disable-model-invocation: true`);
+   - markdown agents under `~/.config/opencode/agents/*.md` with `mode: subagent`, the tier resolved to `model` (override via `tiers.opencode` in `~/.config/kinetic/settings.json`) and `permissions` deny rules translated from each agent's `tools:` allow-list;
+   - a dependency-free TypeScript plugin at `~/.config/opencode/plugins/kinetic.ts` that forwards tool and session events to the Python hooks. It denies by throwing in `tool.execute.before`, asks via `permission.evaluate`, records edits in `execute.after`, and re-prompts to verify on `experimental.idle`.
+
+2. Restart OpenCode so it loads the plugin. There is no `opencode.json` edit and no trust step.
+
+3. Verify: `kinetic doctor --harness opencode` should show `hooks-registered: pass`, `hooks-trusted: na`, `install-manifest: pass`. Skills resolve as `kntc-<name>`.
+
+Known limitation: the idle re-prompt is best-effort (`experimental.idle` is experimental and bounded to three rounds per session), so `verify-before-stop` stays Instructed there, while `verify` and `ship` refusing stale verify is Enforced at the CLI layer on every harness. Validated by `docs/smoke/opencode.md`.
+
+### 6. Check the install
 
 ```
-~/code/kinetic/bin/kinetic install --harness devin
+kinetic doctor --harness <h>
 ```
 
-Codex CLI:
+Failing checks print the fix. Then continue with the [quick start](#quick-start).
 
-```
-~/code/kinetic/bin/kinetic install --harness codex
-```
-
-OpenCode:
-
-```
-~/code/kinetic/bin/kinetic install --harness opencode
-```
-
-`kinetic install` links `kinetic` onto your PATH (`~/.local/bin` — make sure that directory is on your PATH), records the harness and clone in `~/.config/kinetic/settings.json`, and writes an install manifest that `doctor` checks for staleness. Re-run it after `git pull`; `kinetic install --harness <h> --uninstall` removes everything it wrote. On Claude Code, plugin registration itself (`claude --plugin-dir`) stays manual; on Devin CLI the installer runs `devin plugins install --local <clone>` itself (skills appear as `/kinetic:<name>`) and writes Devin-format hooks into `~/.config/devin/config.json`, preserving any foreign entries. Devin support is unverified until the manual checklist in `docs/smoke/devin.md` has been run (it also settles whether Devin double-registers the clone's `hooks/hooks.json`).
-
-On Codex CLI the installer is file generation only: it writes `kntc-<name>` stub skills under `~/.agents/skills` (user-only skills get an `agents/openai.yaml` sidecar with `policy.allow_implicit_invocation: false`), agent definitions under `~/.codex/agents/*.toml` with the tier resolved to `model`/`model_reasoning_effort` (override via `tiers.codex` in `settings.json`), and merges kinetic's hooks into `~/.codex/hooks.json`, preserving foreign entries. Codex gates hooks behind interactive trust: after install, open Codex and run `/hooks` to review and trust kinetic's hooks — they stay inactive until trusted, and `kinetic doctor` fails its `hooks-trusted` check until the `trusted_hash` state matches. Codex support is validated by the manual checklist in `docs/smoke/codex.md`. Known Codex limitations: per-agent tool allow-lists are not honoured (the `tools:` frontmatter has no Codex agent equivalent), and the write-op/deploy confirmation hooks only fire on tool names matching `mcp__.*` patterns — verify MCP tool naming during the smoke run.
-
-On OpenCode the installer is also file generation only: it writes flat `kntc-<name>.md` stub skills under `~/.config/opencode/skills` (user-only skills carry `disable-model-invocation: true`, which OpenCode honours natively), markdown agents under `~/.config/opencode/agents/*.md` with `mode: subagent`, the tier resolved to `model` (override via `tiers.opencode` in `settings.json`), and `permissions` deny rules translated from each agent's `tools:` allow-list, and drops a dependency-free TypeScript plugin at `~/.config/opencode/plugins/kinetic.ts` that forwards tool/session events to the Python hooks — deny by throwing in `tool.execute.before`, ask via `permission.evaluate`, edit recording via `execute.after`, orientation via the session `context` hook, and a bounded verify re-prompt on `experimental.idle`. OpenCode file-drops plugins: no `opencode.json` edit and no trust step. OpenCode support is validated by the manual checklist in `docs/smoke/opencode.md`; known limitations: the idle re-prompt is best-effort (the `experimental.idle` API is experimental and bounded to three rounds per session), so `verify-before-stop` stays Instructed there while `verify`/`ship` refusing stale verify is Enforced at the CLI layer on every harness.
-
-Optional companions that kinetic uses when present and falls back without: the `resolving-merge-conflicts` skill and the `superpowers` and `dev-fleet` plugins, installed wherever the harness keeps skills and plugins (`~/.claude/skills` and `~/.claude/plugins` on Claude Code; `~/.config/devin/skills` or `~/.agents/skills` and `devin plugins install` on Devin CLI). `/kinetic:doctor` reports which are missing.
+Optional companions that kinetic uses when present and falls back without: the `resolving-merge-conflicts` skill and the `superpowers` and `dev-fleet` plugins, installed wherever the harness keeps skills and plugins (`~/.claude/skills` and `~/.claude/plugins` on Claude Code; `~/.config/devin/skills` or `~/.agents/skills` and `devin plugins install` on Devin; `~/.agents/skills` on Codex). `/kinetic:doctor` reports which are missing.
 
 ## Quick start
 
-1. `/kinetic:start` and talk the idea through: the goal, the repos or systems involved, the links and files that matter. Its first step runs `kinetic project start-session`, which leaves a start mark for this conversation (`~/.config/kinetic/sessions/<session_id>`, deleted at the first session start or mark write 7 days after it was written): other process skills then ask before they take the conversation over, even if it never becomes a project. Once the talk has that shape, kinetic asks once "Turn this into a project?". On yes it proposes a name and a folder (never inside a git repo), creates the project folder (`.kinetic/`, `bare-repos/`, `runs/`, and the kinetic block in `AGENTS.md` and `CLAUDE.md`), asks the run id (the recommended one, or one you type), writes the conversation's notes and references into the first run's `docs/`, and tells you to open a new session inside the project and run `/kinetic:run`, which starts that run at the grill. Nothing is written before the yes.
-2. Inside a project, `/kinetic:run "let partners export statements as CSV"` (or a Jira key, or a path to a spec) starts another run. For an idea or a spec path it asks the run id (the recommended slug, or one you type); a ticket key is the run id. kinetic picks a lane, says why in one line, and lets you override it. The discover phase clones each repo into `bare-repos/` (or creates it on GitHub, after you confirm owner, name and visibility) and asks for its verify and optional setup commands; the decompose phase asks whether the run publishes to a tracker.
+1. `/kinetic:init ~/code/api ~/code/web` (or `/kinetic:init` alone, from inside a repo or a folder of repos) registers the repos, detects each one's verify command, asks for the tracker (Jira, GitHub, Linear, local or other) and writes `~/.config/kinetic/`. It ends by running doctor.
+2. `/kinetic:run "let partners export statements as CSV"` (or a Jira key, or a path to a spec) starts a run. kinetic picks a lane, says why in one line, and lets you override it.
 3. Answer the grill questions, approve the spec, approve the ticket breakdown. From there implementers work in the background; you are asked only when one needs a decision.
 4. Approve the ship gate. kinetic pushes the integration branches and opens one draft PR per repo, in merge order.
 5. The retro presents improvement candidates and drafts a runbook and release notes under the run directory.
@@ -155,7 +224,7 @@ A spec brought in from outside still goes through the spec gate, and tickets bro
 
 ## Example runs
 
-These walk through one run per lane. Repo names, ticket text and commands are illustrative; the phases, gates, ids, branches and paths follow what kinetic does. Each example assumes local tracker mode and a project at `~/projects/invoicing`, so the run directory is `~/projects/invoicing/runs/<run-id>/`.
+These walk through one run per lane. Repo names, ticket text and commands are illustrative; the phases, gates, ids, branches and paths follow what kinetic does. Each example assumes local tracker mode and `workspace_root` `~/workspace/kinetic-runs`, so the run directory is `~/workspace/kinetic-runs/<run-id>/`.
 
 ### Quick lane: one small fix in one repo
 
@@ -198,7 +267,7 @@ Starting from a ticket file instead: `/kinetic:implement ~/notes/fix-dates.md` r
 Here the tracker is Jira, so ticket ids are Jira keys and the run id is `INV-4321`.
 
 1. **Intake.** kinetic reads the Jira issue. It names only `api`, so the repo set is not known yet: provisional `feature` lane, start at the grill.
-2. **Grill, then discover.** The grill settles what the change is and names the interface `StatementClient.export`. Discover asks once: use the saved base folder `~/code`, any other source, and may it search the GitHub org `acme`? It scans `~/code`, and a code search for `StatementClient.export` finds `statement-client` (a library) and `web`. You confirm all three; discover clones them into the project's `bare-repos/`, asks for their verify commands, cuts their integration worktrees and sets the lane: "Epic lane: three repos."
+2. **Grill, then discover.** The grill settles what the change is and names the interface `StatementClient.export`. Discover asks once: use the saved base folder `~/code`, any other source, and may it search the GitHub org `acme`? It scans `~/code`, and a code search for `StatementClient.export` finds `statement-client` (a library) and `web`. You confirm all three; discover cuts their integration worktrees and sets the lane: "Epic lane: three repos."
 3. **Spec.** As in the feature lane, but the spec also covers how the repos interact. It is published as a Jira issue under project `INV`, and its key is noted at the top of `spec.md`. Spec gate.
 4. **Tickets, then breakdown gate.** One slice, with one child ticket per repo, linked with Jira "blocks" links and edge labels:
 
@@ -208,7 +277,7 @@ Here the tracker is Jira, so ticket ids are Jira keys and the run id is `INV-432
    | INV-4323 | api | INV-4322 (`snapshot`) |
    | INV-4324 | web | INV-4323 (`merge`) |
 
-   `INV-4322` produces `StatementClient.export`, which `INV-4323` consumes; `graph validate` would reject the breakdown if `INV-4323` were not blocked by `INV-4322`. The `snapshot` edge is allowed because `statement-client` has `publish_snapshot` and `api` has `pin` in the project config. Without them, the decompose phase would use a `merge` edge. You approve the breakdown and the grant.
+   `INV-4322` produces `StatementClient.export`, which `INV-4323` consumes; `graph validate` would reject the breakdown if `INV-4323` were not blocked by `INV-4322`. The `snapshot` edge is allowed because `statement-client` has `publish_snapshot` and `api` has `pin` in `repos.json`. Without them, the decompose phase would use a `merge` edge. You approve the breakdown and the grant.
 5. **Build.** Each repo has its own integration branch `kinetic/INV-4321/integration`, cut at discover.
    - Round 1: only `INV-4322` is ready. Its implementer adds the client method. After review it merges into `statement-client`'s integration branch, and `kinetic.gitops pin` publishes the snapshot and pins `api` to it.
    - Round 2: `INV-4323` is ready. Its worktree is cut from `api`'s integration branch, which now carries the pin, so the implementer builds against the new client.
@@ -318,7 +387,7 @@ Bodies are written for developers: no lists of files touched, every design decis
 
 ## Trackers
 
-The tracker is where tickets live. A project has one tracker, kept in `<project>/.kinetic/config.json` (a repo cannot switch it). It is asked at the decompose phase of the first run that publishes to a tracker and written with `kinetic project update`; each run chooses whether it publishes there or keeps its tickets as files in the run folder:
+The tracker is where tickets live. Pick it once in `~/.config/kinetic/settings.json` (user level only; a repo cannot switch it) with `/kinetic:init`, or edit the file:
 
 | `tracker` | Needs | Settings |
 |---|---|---|
@@ -331,7 +400,7 @@ The tracker is where tickets live. A project has one tracker, kept in `<project>
 
 Each tracker is one prose file, `trackers/<name>.md`, that tells the skills how to create a ticket, link blockers, set a status and so on in that tracker. The prose adapter describes tracker operations; Orbit also has a native ticket store. Adding a tracker with local ticket storage means adding one adapter file. Skills use roles, not tracker words: `names.kind.human` (the label or type for a human ticket), `names.edge.merge`, `names.after`, `names.ships_with`, `names.related` and `names.status.<role>`.
 
-To rename any of these for your project, override them in the project config:
+To rename any of these for your workspace, override them in `settings.json`:
 
 ```json
 {
@@ -406,12 +475,13 @@ Ship fills one template for every PR. The default is `templates/pr-body.md`. To 
 |---|---|
 | `/kinetic:run <JIRA-KEY\|idea\|spec-path> [--from build]` | Orchestrates a run end to end, stopping at each gate |
 | `/kinetic:implement <JIRA-KEY\|ticket-file\|spec-path>` | Alias for `run --from build` on an already specified ticket |
-| `/kinetic:start [idea\|ticket-ref]` | Turns a conversation into a project folder and its first run's notes on your yes, then sends you to a new session inside it; inside a project it hands off to `run` |
+| `/kinetic:init [repo-path ...]` | One-time setup of repos, verify commands, snapshots, tracker; safe to re-run |
 | `/kinetic:doctor` | Read-only health check with a one-line fix per failure |
-| `/kinetic:status [run-dir]` | Phase, tickets, frontier and gates of a run (the run of the current folder by default) |
-| `/kinetic:ask` | The lanes and the next step `next_step` computes for the run of the current folder |
+| `/kinetic:status [run-dir]` | Phase, tickets, frontier and gates of a run (the active one by default) |
+| `/kinetic:ask` | The lanes and the next step `next_step` computes for the active run |
 | `/kinetic:cleanup [run-dir]` | Removes the run's local worktrees and branches whose work is merged, after one confirmation |
-| `/kinetic:bare-clone <org>/<name> ... \| <url> <name>` | Makes bare clones in the project's `bare-repos/` |
+| `/kinetic:bare-setup [folder]` | Detects and saves the folder that holds your bare clones |
+| `/kinetic:bare-clone <org>/<name> ... \| <url> <name>` | Makes bare clones in that folder |
 | `/kinetic:bare-refresh [repo ...]` | Fetches into the bare clones and reports what advanced |
 | `/kinetic:catalog-setup [folder]` | Detects and saves the repo catalog folder |
 | `/kinetic:catalog-refresh <keys...> \| --query <q> \| --run <dir>` | Learns repo labels and recipes from merged deliverables; writes only what you approve |
@@ -422,10 +492,10 @@ Ship fills one template for every PR. The default is `templates/pr-body.md`. To 
 |---|---|---|---|
 | `run` | command | sonnet | The orchestrator: lanes, gates, phases, build loop |
 | `implement` | command | sonnet | `run --from build` |
-| `start` | skill | sonnet | Turns a conversation into a project folder on your yes; hands off to `run` |
-| `doctor`, `status`, `ask` | commands | haiku, haiku, haiku | Read-only views |
+| `init`, `doctor`, `status`, `ask` | commands | sonnet, haiku, haiku, haiku | Setup and read-only views |
 | `cleanup` | command | sonnet | Removes merged worktrees and branches of a run |
-| `bare-clone` | command | sonnet | Bare-clones `<org>/<name>` or a URL into the project's `bare-repos/` |
+| `bare-setup` | command | sonnet | Detects, asks and saves the bare-clones folder (`bare_dir`) |
+| `bare-clone` | command | sonnet | Bare-clones `<org>/<name>` or a URL into that folder |
 | `bare-refresh` | command | sonnet | Fetches into the bare clones; local branches never move |
 | `catalog-setup` | command | sonnet | Detects, asks and saves the catalog folder (`catalog_dir`) |
 | `catalog-refresh` | skill | sonnet | Reads merged deliverables, proposes recipes and repo terms, applies what you approve; `cleanup` offers it |
@@ -446,65 +516,58 @@ Phase skills run inline in the orchestrator's session, so their `model:` field h
 
 ## Configuration
 
-Project config lives in the project folder, `<project>/.kinetic/config.json`. kinetic writes it only through `kinetic project update` and `kinetic discover register`; it carries `"version": 1`, and a newer version or bad JSON is refused before anything is written. The project folder is found by walking up from the current directory, so a session started anywhere inside it (the project root, a run, a worktree) finds it.
+All user config lives in `~/.config/kinetic/`; `/kinetic:init` writes it and never writes inside a repo.
+
+`repos.json`, one entry per repo (`verify` is required):
 
 ```json
 {
-  "version": 1,
-  "repos": {
-    "api": {
-      "path": "/Users/me/projects/invoicing/bare-repos/api.git",
-      "verify": "mvn -q verify",
-      "verify_ticket": "mvn -q -pl statements verify",
-      "setup": "./scripts/dev-setup.sh",
-      "publish_snapshot": "mvn -q deploy -DskipTests",
-      "pin": "./scripts/pin-api.sh \"$KINETIC_UPSTREAM_REF\"",
-      "base_branch": "main"
-    },
-    "web": {
-      "path": "/Users/me/projects/invoicing/bare-repos/web.git",
-      "verify": "npm test"
-    }
+  "api": {
+    "path": "/Users/me/code/api",
+    "verify": "mvn -q verify",
+    "publish_snapshot": "mvn -q deploy -DskipTests",
+    "pin": "./scripts/pin-api.sh \"$KINETIC_UPSTREAM_REF\"",
+    "base_branch": "main"
   },
-  "tracker": "jira",
-  "tracker_settings": { "jira_project": "INV", "slice_issue_type": "Story", "child_issue_type": "Sub-task" }
+  "web": {
+    "path": "/Users/me/code/web",
+    "verify": "npm test"
+  }
 }
 ```
 
-- `path`: the repo's bare clone in `bare-repos/`. Repo names never carry `.git`.
-- `verify`: the command that proves the repo works; its exit code is the verdict. It runs on the integration branch.
-- `verify_ticket`: optional focused command for one ticket, for a repo whose full verify is slow; implementers run it, the full `verify` still gates review and ship.
-- `setup`: optional command run in every new worktree (install dependencies, copy `.env`). A failing setup blocks that ticket and reports its log.
+- `verify`: the command that proves the repo works; its exit code is the verdict.
 - `publish_snapshot`: builds and publishes a snapshot other repos can consume.
 - `pin`: runs in the downstream repo and points it at the upstream snapshot; it reads `KINETIC_UPSTREAM_REF`.
-- `base_branch`: the branch PRs target (default: the clone's default branch).
-- `tracker`, `tracker_settings`, `tracker_names`, `tracker_description`, `pr_template`: see [Trackers](#trackers) and [The PR template override](#the-pr-template-override).
+- `base_branch`: the branch PRs target (default `main`).
 
-A repo-root `.kinetic.json` with the same repo keys overrides the project entry key by key:
+A repo-root `.kinetic.json` with the same keys overrides the central entry key by key:
 
 ```json
 { "verify": "make test" }
 ```
 
-Machine-level settings stay in `~/.config/kinetic/settings.json`:
+`settings.json`:
 
 ```json
 {
+  "tracker": "jira",
+  "tracker_settings": { "jira_project": "INV", "slice_issue_type": "Story", "child_issue_type": "Sub-task" },
+  "workspace_root": "~/workspace/kinetic-runs",
   "repo_roots": ["/Users/me/code"],
   "github_orgs": ["acme"],
+  "bare_dir": "/Users/me/workspace/master/.bare",
   "catalog_dir": "/Users/me/code/team-docs/repo-catalog"
 }
 ```
 
 `repo_roots` (folders whose child repos discovery may scan) and `github_orgs` (orgs discovery may search) are written by the discover phase when you approve them, and offered as defaults on the next run. Missing keys mean none.
 
+`bare_dir` is the folder that holds your bare clones, one per subfolder; `/kinetic:bare-setup` writes it. Unset means no change in behavior. Once saved, `discover` uses it as a source and fetches the clones that match its repos (saving it is consent for those fetches), and a run's worktrees of those clones are cut from `origin/<base>`.
+
 `catalog_dir` is the repo catalog folder; `/kinetic:catalog-setup` writes it. Unset means no catalog anywhere. It holds `index.md` (generated), `terms.md` (the controlled vocabulary), `repos/<repo>.md` (domain terms per repo, with the deliverables behind each), `recipes/<slug>.md` (one kind of change, its parameters, and per repo what it is needed for, with a strength: always, usually, sometimes or seen once) and `ledger.json` (deliverables already cataloged). `/kinetic:catalog-refresh` fills it through `kinetic catalog apply` after you approve each recipe; `discover` reads it as its first source. Put it inside a git checkout to share it with a team; kinetic never commits it.
 
-`skill_guard.deny` (`"skill_guard": {"deny": ["superpowers:brainstorming", ...]}`) replaces the default list of process skills the `skill_guard` hook refuses (`hooks/skill_guard.json`) in sessions working on a run of this project. A session that carries only the start mark uses the default list.
-
-`kinetic project create` writes the instruction files `<project>/AGENTS.md` and `<project>/CLAUDE.md`: the same kinetic block, between `<!-- kinetic:begin -->` and `<!-- kinetic:end -->`, that tells an agent opened in the project to work through `/kinetic:run`. `kinetic project instructions` rewrites that block and keeps any other text in the files. Which harness reads which file, and from where, was probed (`docs/smoke/project.md`): Claude Code reads `CLAUDE.md` from the project folder and any folder under it, OpenCode reads `AGENTS.md` only for a session started at the project root, and neither reads them from inside a run's worktree, which is its own git root. On Claude Code and OpenCode the `skill_guard` hook covers that case.
-
-With `"tracker": "local"` (or no `tracker` key) tickets are files under `<run_dir>/issues/`. See [Trackers](#trackers) for the other trackers, `tracker_settings` and `tracker_names`, and [The PR template override](#the-pr-template-override) for `pr_template`.
+The 0.2.0 top-level `jira_project`, `slice_issue_type` and `child_issue_type` keys are still read. With `"tracker": "local"` (or no `tracker` key) tickets are files under `<run_dir>/issues/`. See [Trackers](#trackers) for the other trackers, `tracker_settings` and `tracker_names`, and [The PR template override](#the-pr-template-override) for `pr_template`.
 
 ## Where state lives
 
@@ -528,8 +591,6 @@ With `"tracker": "local"` (or no `tracker` key) tickets are files under `<run_di
                           tickets.staged.json (tickets staged for publishing)
 ```
 
-The active run is the run of the current directory (the run folder or any worktree in it), else the run this session is bound to in `<project>/.kinetic/sessions/` (written by `kinetic project use-run`). There is no global pointer, so two runs, in one project or in two, work at once. From the project root, `kinetic project runs` lists the open runs.
-
 `kinetic state load --run <run_dir>` prints the whole state: lane, phase, tickets, slices, repos, gates, rulings, verify results and the owning session.
 
 ## What the hooks enforce
@@ -541,25 +602,22 @@ The active run is the run of the current directory (the run folder or any worktr
 | `confirm_write_ops` | PreToolUse on Bash and GitHub/Jira MCP writes | Denies `git push` to `main`, `master` or `Release*`; asks before other pushes, `gh pr create|merge|edit|ready` and Jira or GitHub MCP write calls |
 | `confirm_deploy` | PreToolUse on deploy and Tekton-trigger MCP calls | Asks first |
 | `record_edit` | PostToolUse on file writes | Records edits so the Stop gate can compare them with verifies |
-| `claim_run` | PostToolUse on Bash | Records the session that ran `kinetic project use-run --run <run_dir>` as the run's owner; after `kinetic project start-session` outside a project, writes the start mark `~/.config/kinetic/sessions/<session_id>`. Marks older than 7 days and bindings of runs that are gone or done are swept there and by `orient` at session start |
-| `skill_guard` | PreToolUse on the harness's skill tool | Denies a listed process skill (`hooks/skill_guard.json`, or the project's `skill_guard.deny`) in a session working on a run, and asks in a session that carries only the start mark. Kinetic's own skills always pass |
-| `orient` | SessionStart | Tells a new session about the active run and the next step; sweeps old marks and the project's bindings of gone or done runs |
+| `claim_run` | PostToolUse on Bash | Records the session that wrote the active-run pointer as the run's owner |
+| `orient` | SessionStart | Tells a new session about the active run and the next step |
 
-The run-scoped hooks (isolation, record_edit, completion_gate) find the run from the call's working directory, else from the session's binding (in the working directory's project, or in the project the session was started in once the working directory has left it, so a `cd` elsewhere does not lift isolation). They act only in the session that owns the run and on calls whose working directory is inside the run directory, so other Claude sessions on the machine are unaffected. At a project root with no binding they never pick a run. The push and deploy hooks always apply.
-
-`skill_guard` backs the `skill-ownership` guarantee: Enforced on Claude Code and OpenCode, where the profile names the skill tool (`tools.skill`), and Instructed on Devin and Codex, where the project instruction files and the skill text carry it until their skill calls are probed. On Claude the hook sees only a skill the model invokes; a skill you type as a slash command is never refused (`docs/smoke/skill-hook.md`). After updating, run `kinetic install --harness opencode` again so the generated OpenCode plugin routes skill calls to the hook.
+The run-scoped hooks (isolation, record_edit, completion_gate) act only in the session that owns the run and on calls whose working directory is inside the run directory, so other Claude sessions on the machine are unaffected. The push and deploy hooks always apply.
 
 ## Recovery and troubleshooting
 
-- **Resume after a crash or in a new session.** Run `/kinetic:run` again from the run folder (or pick the run from the list it shows at the project root). It binds the run with `kinetic project use-run` (which claims it for the new session) and resumes at the recorded phase. Recorded gates stay approved. For a ticket still `running` with no report, kinetic shows what its worktree holds and asks whether to re-dispatch an implementer there or set it back to `todo`.
+- **Resume after a crash or in a new session.** Run `/kinetic:run` again. It finds the active run, rewrites the pointer (which claims the run for the new session), and resumes at the recorded phase. Recorded gates stay approved. For a ticket still `running` with no report, kinetic shows what its worktree holds and asks whether to re-dispatch an implementer there or set it back to `todo`.
 - **A crash during a fix round.** Recovery cannot yet tell a dead fix agent from a finished first round; check the report's latest `## Fix round` section and `<run_dir>/reviews/<id>-fix-N.md` by hand.
-- **`set-ticket` refuses `done`.** The ticket has no passing verify newer than its last edit. Re-run verify in its worktree (`kinetic verify --run <run_dir> --repo-name <repo> --repo-path <worktree> --ticket <id> --scope ticket`) or resume the implementer.
+- **`set-ticket` refuses `done`.** The ticket has no passing verify newer than its last edit. Re-run verify in its worktree (`kinetic verify --run <run_dir> --repo-name <repo> --repo-path <worktree> --ticket <id>`) or resume the implementer.
 - **Clean up after merge.** The retro offers to remove ticket and integration worktrees and branches whose PRs merged, listing them and asking first. It never force-removes and never deletes the run directory.
-- **Abandon a run.** Stop working on it. The run directory stays for reference; `kinetic project runs` keeps listing it until its phase is `done`.
+- **Abandon a run.** `rm -f ~/.config/kinetic/active-run`. The run directory stays for reference.
 - **A hook denied something.** A denial is final for that action. Read the reason: an isolation denial names the allowed roots; a push denial means the target is a protected branch.
-- **"no kinetic project here".** The command ran outside a project folder (it exits 2). Start one with `/kinetic:start`, or `cd` into the project.
+- **`/kinetic:init` is denied writing config.** You are in the session that owns the active run; run it from another session.
 - **The run is stalled.** The frontier is empty with tickets still `todo`. kinetic shows the waiting edges; usually a `snapshot` edge between repos without `publish_snapshot`/`pin`, or a `release` edge nobody has marked. Mark a release with `kinetic state set-ticket --run <run_dir> --id <upstream-id> --field status=released`.
-- **Doctor checks:** `git` and `gh` on PATH, `gh auth status`, inside a project a readable project config and a resolvable verify command per repo (outside a project only the machine checks run), the optional companion skills and plugins, and a reminder to check the Atlassian MCP with `/mcp`.
+- **Doctor checks:** `git` and `gh` on PATH, `gh auth status`, a readable `repos.json`, a resolvable verify command per repo, the optional companion skills and plugins, and a reminder to check the Atlassian MCP with `/mcp`.
 
 **Upgrading an existing Claude Code install:** skills, agents and hooks now call `kinetic ...` instead of `PYTHONPATH=${CLAUDE_PLUGIN_ROOT}/scripts python3 -m kinetic.*`. After updating, run `<clone>/bin/kinetic install --harness claude` once; until then `doctor` warns and skills fall back to `python3 <plugin-root>/bin/kinetic`.
 
@@ -588,13 +646,12 @@ docs/                        comparison, design spec, implementation plan, rulin
 
 | Module | Responsibility |
 |---|---|
-| `project.py` | Finds the project folder from any directory under it, creates it, updates its config, lists runs and binds a session to a run |
 | `state.py` | Run state: init, phase, slices, tickets, repos, gates, rulings, verify and edit stamps, owner session; flock-guarded atomic writes; CLI (whose `set-ticket` refuses `done` without a passing, current verify) |
 | `graph.py` | Validates the ticket graph (missing repo except on human tickets, edge types, unknown blockers, unused slices, cycles, consumers without an edge to their producer, unknown or contradicting `after`/`related`, lone `ships_with` groups; unproduced interfaces as warnings) and gives a topological order that honours `after` |
 | `frontier.py` | Ready tickets (never human): satisfied blockers, the cap of 3 running, one per repo; `waiting_on_you` and `only_human_left` for human tickets |
 | `gitops.py` | `worktree`, `merge` (ticket into integration), `merge-order` across repos (ships-with neighbours kept together), `ships-with` groups, `pin` downstream repos to a snapshot, `status-hash` and `assert-unchanged` (reviewer read-only check) |
-| `verify.py` | Runs a repo's verify command (`--scope ticket` uses `verify_ticket` when set), logs it and records the result in state |
-| `config.py` | Resolves a repo's config from the project config and `.kinetic.json` |
+| `verify.py` | Runs a repo's verify command, logs it and records the result in state |
+| `config.py` | Resolves a repo's config from `repos.json` and `.kinetic.json` |
 | `detect_repos.py` | Proposes a verify command from build markers (Maven, Gradle, npm, Go, Cargo, pyproject, Makefile) |
 | `tracker.py` | Resolves the tracker adapter, its settings and role names, and the PR template path |
 | `ticket_store.py` | The ticket store interface and the local ticket store (tickets in `state.json`) |
