@@ -158,6 +158,7 @@ def _status_ops(tid: str, before: str, after: str, who: str) -> list:
     if after == "running":
         if before in PAUSED:
             transition("resume")
+            ops.append({"op": "claim", "id": tid, "by": who})
         elif before == "in_review":
             transition("request_changes")
         else:
