@@ -478,6 +478,9 @@ class OrbitTicketStore:
         return list(snapshot.values())
 
     # -- staged tickets --
+    def capabilities(self) -> frozenset:
+        return frozenset({"review-states"})
+
     def stage_path(self, run_dir) -> Path:
         from kinetic.state import internal
         return internal(run_dir) / STAGED
