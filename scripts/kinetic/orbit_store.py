@@ -190,6 +190,12 @@ def _status_ops(tid: str, before: str, after: str, who: str) -> list:
     return ops
 
 
+def _scoped_paths(repo, paths: list) -> list:
+    """Orbit compares touched paths across the whole Board, so each carries its repo's name."""
+    clean = [p[2:] if p.startswith("./") else p.lstrip("/") for p in paths]
+    return [f"{repo}/{p}" for p in clean] if repo else clean
+
+
 def ops_for(tid: str, before: dict | None, after: dict, run_id: str, names: dict) -> list:
     """Native workflow, links and Property updates in one Orbit batch."""
     if before is not None and _fields(before) == _fields(after):
@@ -217,7 +223,7 @@ def ops_for(tid: str, before: dict | None, after: dict, run_id: str, names: dict
         ops += _status_ops(tid, b["status"], a["status"], holder(run_id, tid, "implementer"))
     if (before or {}).get("touches") != after.get("touches"):
         ops.append({"op": "property", "id": tid, "owner": "touches",
-                    "value": {"paths": after.get("touches", [])}})
+                    "value": {"paths": _scoped_paths(after.get("repo"), after.get("touches", []))}})
     ops.append({"op": "property", "id": tid, "owner": ANNOTATION_OWNER,
                 "value": _property_fields(after)})
     return ops
@@ -285,7 +291,9 @@ def to_ticket(task: dict) -> dict:
     t["slice"] = task.get("parent", t["slice"])
     touches = (task.get("properties") or {}).get("touches")
     if isinstance(touches, dict):
-        t["touches"] = touches.get("paths", [])
+        own = f"{t.get('repo')}/" if t.get("repo") else None
+        t["touches"] = [p[len(own):] if own and p.startswith(own) else p
+                        for p in touches.get("paths", [])]
     if task.get("assignee"):
         t["assignee"] = task["assignee"]
     t.update(blocked_by=[], after=[], related=[], ships_with=None)
