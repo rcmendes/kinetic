@@ -7,7 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kinetic import state, status
+from unittest.mock import patch
+
+from kinetic import state, status, ticket_store
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -77,3 +79,60 @@ class StatusTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QueryStore:
+    """A store that declares query and must not be asked to read every ticket."""
+
+    def __init__(self):
+        self.rollups = 0
+
+    def capabilities(self):
+        return frozenset({"query"})
+
+    def read(self, run_dir, st):
+        raise AssertionError("summary must not read every ticket")
+
+    def rollup(self, run_dir, st):
+        self.rollups += 1
+        return {"done": 4, "blocked": 1, "open": 2, "cancelled": 0, "total": 7}
+
+
+class CoreOnlyStore:
+    def read(self, run_dir, st):
+        return {"A": t("api", "done"), "B": t("api", "todo", [{"id": "A", "type": "merge"}]),
+                "C": t("api", "todo", [{"id": "X", "type": "merge"}])}
+
+
+class SummaryTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.run_dir = Path(tmp.name)
+        state.init(self.run_dir, lane="feature", ref="x")
+        state.record_gate(self.run_dir, "spec", True)
+
+    def test_a_store_with_query_answers_from_one_rollup(self):
+        store = QueryStore()
+        with patch.object(ticket_store, "for_state", return_value=store):
+            out = status.summary(self.run_dir)
+        self.assertEqual(store.rollups, 1)
+        self.assertIn("Progress: 4 of 7 done, 1 blocked, 2 open", out)
+        self.assertIn("- spec: yes", out)
+
+    def test_a_store_without_query_is_counted_from_its_tickets(self):
+        with patch.object(ticket_store, "for_state", return_value=CoreOnlyStore()):
+            out = status.summary(self.run_dir)
+        self.assertIn("Progress: 1 of 3 done, 1 blocked, 1 open", out)
+
+    def test_the_local_store_gives_the_same_counts_as_the_table(self):
+        state.set_ticket(self.run_dir, "a", repo="api", status="running")
+        out = status.summary(self.run_dir)
+        self.assertIn("Progress: 0 of 1 done, 0 blocked, 1 open", out)
+
+    def test_summary_flag_prints_the_summary(self):
+        env = {**os.environ, "PYTHONPATH": str(ROOT / "scripts")}
+        done = subprocess.run([sys.executable, "-m", "kinetic.status", "--run", str(self.run_dir),
+                               "--summary"], capture_output=True, text=True, env=env)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("Progress:", done.stdout)
