@@ -479,7 +479,7 @@ class OrbitTicketStore:
 
     # -- staged tickets --
     def capabilities(self) -> frozenset:
-        return frozenset({"review-states", "checkpoint"})
+        return frozenset({"review-states", "checkpoint", "schedule-hints"})
 
     def stage_path(self, run_dir) -> Path:
         from kinetic.state import internal
@@ -838,6 +838,16 @@ class OrbitTicketStore:
             return None
         found = call(self._anchor(st), ["show", ticket_id]).get("checkpoint")
         return {k: v for k, v in found.items() if v is not None} if found else None
+
+    def hints(self, run_dir, st: dict, ready_ids: list) -> list:
+        """Order ready tickets by Orbit's critical path: the longest chain of open work
+        that waits on a ticket. Listing only; nothing is claimed."""
+        listed = call(self._anchor(st), ["ready", "--all", "--strategy", "critical-path",
+                                         "--label", run_label(st["run_id"], self._names(st)),
+                                         "--limit", "1000"]).get("issues", [])
+        rank = {issue["id"]: n for n, issue in enumerate(listed)}
+        offered = list(ready_ids)
+        return sorted(offered, key=lambda tid: (rank.get(tid, len(rank)), offered.index(tid)))
 
     def touch(self, run_dir, st: dict, ticket_id: str) -> None:
         self._resume_pending(st)

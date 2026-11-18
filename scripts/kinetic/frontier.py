@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from kinetic import graph, state
+from kinetic import graph, state, ticket_store
 
 DONE = {"done", "done_with_concerns", "merged", "released"}
 MERGED = {"merged", "released"}
@@ -37,17 +37,34 @@ def ready(st: dict, cap: int = 3) -> list[str]:
         return []  # cycle: the graph validator reports it, never dispatch into it
     running = [t for t in tickets.values() if t["status"] in ("running", "in_review")]
     busy = {t["repo"] for t in tickets.values() if t["status"] in OCCUPYING}
+    candidates = [i for i in order
+                  if not _human(tickets[i]) and tickets[i]["status"] == "todo" and tickets[i].get("repo")
+                  and _unblocked(tickets[i], tickets)]
     out = []
-    for i in order:
+    for i in _hinted(st, candidates):
         if len(running) + len(out) >= cap:
             break
-        t = tickets[i]
-        if _human(t) or t["status"] != "todo" or not t.get("repo") or t["repo"] in busy:
+        if tickets[i]["repo"] in busy:
             continue
-        if _unblocked(t, tickets):
-            out.append(i)
-            busy.add(t["repo"])
+        out.append(i)
+        busy.add(tickets[i]["repo"])
     return out
+
+
+def _hinted(st: dict, candidates: list) -> list:
+    """Candidates in the ticket store's preferred order, when it gives hints. A hint
+    only reorders what kinetic already judged ready; a store failure changes nothing."""
+    if len(candidates) < 2:
+        return candidates
+    store = ticket_store.for_state(st)
+    if not ticket_store.has(store, "schedule-hints"):
+        return candidates
+    try:
+        hinted = store.hints(st.get("run_dir"), st, list(candidates))
+    except ticket_store.TicketStoreError:
+        return candidates
+    ranked = [i for i in dict.fromkeys(hinted) if i in candidates]
+    return ranked + [i for i in candidates if i not in ranked]
 
 
 def _unblocked(t: dict, tickets: dict) -> bool:
