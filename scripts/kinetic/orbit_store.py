@@ -88,66 +88,115 @@ def _fields(t: dict) -> dict:
     return {k: v for k, v in t.items() if k not in DERIVED}
 
 
+def _property_fields(t: dict) -> dict:
+    native = {"status", "slice", "assignee", "blocked_by", "after", "related", "ships_with"}
+    return {k: v for k, v in _fields(t).items() if k not in native}
+
+
 def derive(ticket: dict, run_id: str, names: dict) -> dict:
-    """Orbit status, claim holder, waiting reason and labels for a ticket."""
-    status = ticket.get("status", "todo")
-    human = ticket.get("kind") == "human"
+    """Native status and identifying labels for a ticket."""
     labels = {run_label(run_id, names)}
-    if ticket.get("ships_with"):
-        labels.add(names["ships_with"].replace("<group>", ticket["ships_with"]))
-    if human and names["kind"]["human"]:
+    if ticket.get("kind") == "human" and names["kind"]["human"]:
         labels.add(names["kind"]["human"])
-    if status in DONE:
-        return {"status": "done", "claim": None, "waiting_on": None, "labels": labels}
-    if status == "todo":
-        if not human:
-            labels.add(names["hold"])
-        return {"status": "todo", "claim": None, "waiting_on": None, "labels": labels}
-    waiting = None
-    if status in PAUSED:
-        waiting = ticket.get("human_note") or f"kinetic: {status}"
-    return {"status": "in_progress", "claim": holder(run_id), "waiting_on": waiting,
-            "labels": labels}
+    return {"status": ticket.get("status", "todo"), "labels": labels}
+
+
+def _links(ticket: dict, run_id: str) -> dict:
+    links = {}
+    for edge in ticket.get("blocked_by", []):
+        links[("blocks", "to", edge["id"])] = {"blocking": True,
+                                                   "attributes": {"edge": edge["type"]}}
+    for field, kind in (("after", "after"), ("related", "relates-to")):
+        for target in ticket.get(field, []):
+            links[(kind, "to", target)] = {"blocking": False, "attributes": {}}
+    group = ticket.get("ships_with")
+    if group:
+        links[("ships-with", "external", f"kinetic:{run_id}:ship:{group}")] = {
+            "blocking": False, "attributes": {"group": group}}
+    return links
+
+
+def _status_ops(tid: str, before: str, after: str, who: str) -> list:
+    if before == after:
+        return []
+    ops = []
+
+    def transition(name):
+        ops.append({"op": "transition", "id": tid, "name": name, "by": who})
+
+    if before == "done" and after == "done_with_concerns":
+        transition("concerns")
+        return ops
+    if before in DONE and not (before in ("done", "done_with_concerns")
+                               and after in ("merged", "released")
+                               or before == "merged" and after == "released"):
+        transition("reopen")
+        before = "todo"
+    if after == "running":
+        if before in PAUSED:
+            transition("resume")
+        elif before == "in_review":
+            transition("request_changes")
+        else:
+            ops.append({"op": "claim", "id": tid, "by": who})
+    elif after == "todo":
+        if before in PAUSED:
+            transition("resume")
+        elif before == "in_review":
+            transition("request_changes")
+        if before != "todo":
+            ops.append({"op": "release", "id": tid, "by": who})
+    elif after in ("blocked", "needs_decision"):
+        if before in PAUSED:
+            transition("resume")
+        transition("block" if after == "blocked" else "escalate")
+    elif after in DONE:
+        if after == "done_with_concerns":
+            if before != "running" and before != "in_review":
+                if before in PAUSED:
+                    transition("resume")
+                else:
+                    ops.append({"op": "claim", "id": tid, "by": who})
+            transition("concerns")
+        else:
+            if before not in DONE:
+                ops.append({"op": "done", "id": tid, "by": who})
+            if after in ("merged", "released") and before != "merged":
+                transition("merge")
+            if after == "released":
+                transition("release_artifact")
+    else:
+        raise OrbitStoreError("INVALID_ARGUMENT", f"unsupported kinetic status '{after}'")
+    return ops
 
 
 def ops_for(tid: str, before: dict | None, after: dict, run_id: str, names: dict) -> list:
-    """`orbit batch` operations moving a published ticket from before to after."""
+    """Native workflow, links and Property updates in one Orbit batch."""
     if before is not None and _fields(before) == _fields(after):
         return []
-    b = derive(before, run_id, names) if before is not None else None
-    a = derive(after, run_id, names)
-    ops: list = []
-    who = holder(run_id)
-    if b and b["status"] == "done" and a["status"] != "done":
-        ops.append({"op": "reopen", "id": tid})
-        b = {**b, "status": "todo", "claim": None}
-    if b and b["waiting_on"] and not a["waiting_on"]:
-        ops.append({"op": "update", "id": tid, "clear_waiting": True})
-    old_labels = b["labels"] if b else set()
+    if (after.get("kind") != "human" and after.get("status") in DONE
+            and (before or {}).get("status") not in DONE):
+        raise OrbitStoreError("REVIEW_REQUIRED", "agent completion requires approved reviews",
+                              "submit-review, then record-review for spec and standards")
+    old, new = _links(before or {}, run_id), _links(after, run_id)
+    ops = []
+    for key, value in old.items():
+        if new.get(key) != value:
+            kind, target_field, target = key
+            ops.append({"op": "unlink", "id": tid, "type": kind, target_field: target})
+    for key, value in new.items():
+        if old.get(key) != value:
+            kind, target_field, target = key
+            ops.append({"op": "link", "id": tid, "type": kind, target_field: target, **value})
+    b, a = derive(before or {}, run_id, names), derive(after, run_id, names)
+    old_labels = b["labels"] if before is not None else set()
     add, remove = sorted(a["labels"] - old_labels), sorted(old_labels - a["labels"])
     if add or remove:
-        label = {"op": "label", "id": tid}
-        if add:
-            label["add"] = add
-        if remove:
-            label["remove"] = remove
-        ops.append(label)
-    old_deps = {e["id"] for e in (before or {}).get("blocked_by", [])}
-    new_deps = {e["id"] for e in after.get("blocked_by", [])}
-    ops += [{"op": "depend", "id": tid, "on": d} for d in sorted(new_deps - old_deps)]
-    ops += [{"op": "undepend", "id": tid, "on": d} for d in sorted(old_deps - new_deps)]
-    # Claim when entering in_progress, and renew when resuming a paused ticket
-    # (its Lease may have lapsed while it waited).
-    resuming = (before or {}).get("status") in PAUSED and after.get("status") == "running"
-    if a["claim"] and (not b or b["claim"] != a["claim"] or resuming):
-        ops.append({"op": "claim", "id": tid, "by": who})
-    if a["waiting_on"] and (not b or b["waiting_on"] != a["waiting_on"]):
-        ops.append({"op": "update", "id": tid, "waiting_on": a["waiting_on"]})
-    if b and b["status"] == "in_progress" and a["status"] == "todo":
-        ops.append({"op": "release", "id": tid, "by": who, "force": True})
-    if a["status"] == "done" and (not b or b["status"] != "done"):
-        ops.append({"op": "done", "id": tid, "by": who})
-    ops.append({"op": "annotate", "id": tid, "owner": ANNOTATION_OWNER, "value": _fields(after)})
+        ops.append({"op": "label", "id": tid, "add": add, "remove": remove})
+    if b["status"] != a["status"]:
+        ops += _status_ops(tid, b["status"], a["status"], holder(run_id, tid, "implementer"))
+    ops.append({"op": "property", "id": tid, "owner": ANNOTATION_OWNER,
+                "value": _property_fields(after)})
     return ops
 
 
@@ -197,15 +246,37 @@ def _lapsed(lease_until) -> bool:
 
 
 def to_ticket(task: dict) -> dict:
-    t = dict((task.get("annotations") or {}).get(ANNOTATION_OWNER) or {})
-    if t.get("status") == "running":
+    metadata = (task.get("properties") or {}).get(ANNOTATION_OWNER)
+    if metadata is None:
+        metadata = (task.get("annotations") or {}).get(ANNOTATION_OWNER)
+    if not metadata:
+        return {}
+    from kinetic.state import ticket_defaults
+    t = {**ticket_defaults(), **metadata}
+    t["status"] = task.get("status", t["status"])
+    t["slice"] = task.get("parent", t["slice"])
+    if task.get("assignee"):
+        t["assignee"] = task["assignee"]
+    t.update(blocked_by=[], after=[], related=[], ships_with=None)
+    for link in task.get("links", []):
+        kind, target = link["type"], link["target"]
+        attributes = link.get("attributes") or {}
+        if kind == "blocks" and isinstance(target, str) and link.get("blocking", True):
+            t["blocked_by"].append({"id": target, "type": attributes.get("edge", "merge")})
+        elif kind in ("after", "relates-to") and isinstance(target, str):
+            t["after" if kind == "after" else "related"].append(target)
+        elif kind == "ships-with":
+            t["ships_with"] = attributes.get("group")
+    if t["status"] == "running":
         t["liveness"] = "stuck" if _lapsed(task.get("lease_until")) else "alive"
     return t
 
 
 def _role(task: dict):
-    """The kinetic role Annotation: "spec", "slice" or None (a ticket)."""
-    return ((task.get("annotations") or {}).get(ANNOTATION_OWNER) or {}).get("role")
+    """The kinetic role Property: spec, slice or None (a ticket)."""
+    metadata = ((task.get("properties") or {}).get(ANNOTATION_OWNER)
+                or (task.get("annotations") or {}).get(ANNOTATION_OWNER) or {})
+    return metadata.get("role")
 
 
 def _is_slice(task: dict, label: str) -> bool:
@@ -306,7 +377,7 @@ class OrbitTicketStore:
         label = run_label(run_id, names)
         data = call(self._anchor(st), ["list", "--include-closed", "--all",
                                        "--label", label])
-        tasks = data.get("tasks", [])
+        tasks = data.get("issues", [])
         prefix = source_key(run_id, "")
         ids = {task["source_key"][len(prefix):]: task["id"] for task in tasks
                if (task.get("source_key") or "").startswith(prefix)
@@ -327,7 +398,12 @@ class OrbitTicketStore:
             t = _rewrite(to_ticket(task), ids)
             if not t:
                 continue
-            if task.get("status") == "done" and t.get("status") not in DONE:
+            metadata = ((task.get("properties") or {}).get(ANNOTATION_OWNER)
+                        or (task.get("annotations") or {}).get(ANNOTATION_OWNER) or {})
+            from kinetic.state import done_refusal
+            verified = done_refusal({**st, "tickets": {task["id"]: t}}, task["id"]) is None
+            completed_here = metadata.get("status") in DONE or verified or t.get("done_by") == "human"
+            if task.get("status") == "done" and not completed_here:
                 # Done in Orbit but not in kinetic: someone finished it outside kinetic.
                 actual = dict(t, status="done")
                 if t.get("kind") == "human":
@@ -339,11 +415,6 @@ class OrbitTicketStore:
         spec = next((t for t in tasks if _role(t) == "spec"), None)
         if spec:
             self.config["spec_task"] = spec["id"]
-            slices = [t for t in tasks if _is_slice(t, label) and t["id"] in ids.values()]
-            if (slices and spec.get("status") == "todo"
-                    and all(t.get("status") == "done" for t in slices)):
-                # Every slice is done but the spec Task is not: a missed close heals here.
-                fixes.append({"op": "done", "id": spec["id"], "by": holder(run_id)})
         if fixes:
             self._batch(st, fixes)
         return tickets
@@ -367,8 +438,8 @@ class OrbitTicketStore:
                 changes += ops_for(tid, before[tid], t, run_id, names)
         ref = self._ref(run_id, set(new), aliases)
         for op in changes:
-            if op["op"] in ("depend", "undepend"):
-                op["on"] = ref(op["on"])
+            if op["op"] in ("link", "unlink") and "to" in op:
+                op["to"] = ref(op["to"])
         operations = (self._add_ops(run_dir, st, new, [], aliases)[0] + changes
                       + self._close_slices(st, staged, before, after))
         self._batch(st, operations)
@@ -385,44 +456,45 @@ class OrbitTicketStore:
         return ref
 
     def _add_ops(self, run_dir, st: dict, tickets: dict, new_slices: list, aliases: dict):
-        """`add` operations for slices and tickets not yet on the Board; returns (ops, order)."""
+        """Create every Issue before linking, so non-blocking links may point forward."""
         from kinetic import graph
         run_id, names = st["run_id"], self._names(st)
         ref = self._ref(run_id, set(tickets) | set(new_slices), aliases)
         spec_id = self._spec_id(st) if new_slices else None
         ops = []
-        for s in new_slices:
-            add = {"op": "add", "key": source_key(run_id, s),
-                   "title": ticket_text(run_dir, s)[0],
-                   "labels": [run_label(run_id, names)]}
+        for slice_id in new_slices:
+            add = {"op": "add", "key": source_key(run_id, slice_id),
+                   "title": ticket_text(run_dir, slice_id)[0],
+                   "type": "task",
+                   "labels": [run_label(run_id, names)],
+                   "properties": {ANNOTATION_OWNER: {"role": "slice"}}}
             if spec_id:
-                # New shape: a plain Task nested under the run's spec Task.
                 add["parent"] = spec_id
-                add["annotations"] = {ANNOTATION_OWNER: {"role": "slice", "spec": spec_id}}
-            else:
-                add["type"] = "epic"
-                # optional: Boards and runs without a recorded spec never see this Annotation
-                if st.get("spec"):
-                    add["annotations"] = {ANNOTATION_OWNER: {"spec": st["spec"]}}
+                add["properties"][ANNOTATION_OWNER]["spec"] = spec_id
+            elif st.get("spec"):
+                add["properties"][ANNOTATION_OWNER]["spec"] = st["spec"]
             ops.append(add)
         try:
             order = graph.topo_order(tickets)
         except ValueError:
-            order = sorted(tickets)  # graph validate reports the cycle; Orbit refuses it
+            order = sorted(tickets)  # graph validation reports the cycle; Orbit refuses it
         for pid in order:
             t = tickets[pid]
             title, body = ticket_text(run_dir, pid)
-            fresh = dict(t, status="todo")
             add = {"op": "add", "key": source_key(run_id, pid), "title": title, "body": body,
-                   "labels": sorted(derive(fresh, run_id, names)["labels"]),
-                   "depends_on": [ref(e["id"]) for e in t.get("blocked_by", [])],
-                   "annotations": {ANNOTATION_OWNER: _fields(t)}}
+                   "type": "sub-task" if t.get("slice") else "task",
+                   "labels": sorted(derive(t, run_id, names)["labels"]),
+                   "properties": {ANNOTATION_OWNER: _property_fields(t)}}
             if t.get("slice"):
                 add["parent"] = ref(t["slice"])
             ops.append(add)
-            if t.get("status", "todo") != "todo":
-                ops += [o for o in ops_for(ref(pid), fresh, t, run_id, names)
-                        if o["op"] not in ("depend", "undepend")]
+        for pid in order:
+            for op in ops_for(ref(pid), None, tickets[pid], run_id, names):
+                if op["op"] == "label":
+                    continue  # identifying labels were set by add
+                if op["op"] in ("link", "unlink") and "to" in op:
+                    op["to"] = ref(op["to"])
+                ops.append(op)
         return ops, order
 
     def _close_slices(self, st: dict, staged: dict, before: dict, after: dict) -> list:

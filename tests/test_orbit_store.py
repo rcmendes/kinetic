@@ -41,75 +41,32 @@ SKIP_REASON = "orbit 0.10.16 or later (Batches and Annotations, nested SubTasks)
 
 
 class DeriveTest(unittest.TestCase):
-    def derive(self, **fields):
-        return orbit_store.derive(ticket(**fields), RUN, NAMES)
+    def test_native_statuses_are_preserved_without_readiness_labels(self):
+        for status in ("todo", "running", "needs_decision", "blocked", "done",
+                       "done_with_concerns", "merged", "released"):
+            self.assertEqual(orbit_store.derive(ticket(status=status), RUN, NAMES),
+                             {"status": status, "labels": {f"kinetic-run-{RUN}"}})
 
-    def test_derive_matches_status_table(self):
-        run_label = f"kinetic-run-{RUN}"
-        self.assertEqual(self.derive(status="todo"),
-                         {"status": "todo", "claim": None, "waiting_on": None,
-                          "labels": {run_label, "kinetic"}})
-        self.assertEqual(self.derive(status="todo", kind="human"),
-                         {"status": "todo", "claim": None, "waiting_on": None,
-                          "labels": {run_label, "ready-for-human"}})
-        self.assertEqual(self.derive(status="running"),
-                         {"status": "in_progress", "claim": HOLDER, "waiting_on": None,
-                          "labels": {run_label}})
-        for status in ("needs_decision", "blocked"):
-            d = self.derive(status=status, human_note="pick a schema")
-            self.assertEqual((d["status"], d["claim"], d["labels"]),
-                             ("in_progress", HOLDER, {run_label}), status)
-            self.assertEqual(d["waiting_on"], "pick a schema")
-        self.assertEqual(self.derive(status="needs_decision")["waiting_on"],
-                         "kinetic: needs_decision")
-        for status in ("done", "done_with_concerns", "merged", "released"):
-            d = self.derive(status=status)
-            self.assertEqual((d["status"], d["claim"], d["waiting_on"]), ("done", None, None), status)
-
-    def test_ships_with_label(self):
-        self.assertIn("ships-with-g1", self.derive(ships_with="g1")["labels"])
+    def test_ships_with_does_not_create_a_label(self):
+        self.assertEqual(orbit_store.derive(ticket(ships_with="g1"), RUN, NAMES)["labels"],
+                         {f"kinetic-run-{RUN}"})
 
 
 class OpsForTest(unittest.TestCase):
     def ops(self, before, after):
         return orbit_store.ops_for("orb-a.b", before, after, RUN, NAMES)
 
-    def test_ops_for_dispatch_unholds_and_claims_in_one_batch(self):
-        ops = self.ops(ticket(status="todo"), ticket(status="running"))
-        self.assertEqual([o["op"] for o in ops], ["label", "claim", "annotate"])
-        self.assertEqual(ops[0]["remove"], ["kinetic"])
-        self.assertEqual(ops[1], {"op": "claim", "id": "orb-a.b", "by": HOLDER})
-        self.assertEqual(ops[2]["owner"], "kinetic")
-        self.assertEqual(ops[2]["value"]["status"], "running")
-
     def test_no_op_mutation_sends_no_batch(self):
         t = ticket(status="running", repo="api")
         self.assertEqual(self.ops(t, dict(t, liveness="alive")), [])
 
-    def test_blocked_by_becomes_dependency_and_annotation(self):
+    def test_blocked_by_becomes_typed_link_without_duplicate_property(self):
         edge = {"id": "orb-x.y", "type": "merge"}
         ops = self.ops(ticket(), ticket(blocked_by=[edge]))
-        self.assertIn({"op": "depend", "id": "orb-a.b", "on": "orb-x.y"}, ops)
-        self.assertEqual(ops[-1]["value"]["blocked_by"], [edge])
-
-    def test_resume_clears_waiting_and_reclaims(self):
-        ops = self.ops(ticket(status="needs_decision"), ticket(status="running"))
-        kinds = [o["op"] for o in ops]
-        self.assertEqual(kinds[:2], ["update", "claim"])
-        self.assertEqual(ops[0], {"op": "update", "id": "orb-a.b", "clear_waiting": True})
-
-    def test_pause_sets_waiting_after_claim(self):
-        ops = self.ops(ticket(status="running"), ticket(status="needs_decision", human_note="why"))
-        self.assertEqual(ops[0], {"op": "update", "id": "orb-a.b", "waiting_on": "why"})
-
-    def test_done_releases_claim(self):
-        ops = self.ops(ticket(status="running"), ticket(status="done"))
-        self.assertIn({"op": "done", "id": "orb-a.b", "by": HOLDER}, ops)
-
-    def test_reopen_before_running_again(self):
-        ops = self.ops(ticket(status="done"), ticket(status="running"))
-        self.assertEqual(ops[0], {"op": "reopen", "id": "orb-a.b"})
-        self.assertIn({"op": "claim", "id": "orb-a.b", "by": HOLDER}, ops)
+        self.assertIn({"op": "link", "id": "orb-a.b", "type": "blocks", "to": "orb-x.y",
+                       "blocking": True, "attributes": {"edge": "merge"}}, ops)
+        self.assertEqual(ops[-1]["op"], "property")
+        self.assertNotIn("blocked_by", ops[-1]["value"])
 
 
 def task_json(tid, ann, *, status="todo", lease_until=None, task_type="task", labels=()):
