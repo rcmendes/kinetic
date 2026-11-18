@@ -96,6 +96,11 @@ class StoreContract:
     def tickets(self):
         return state.load(self.run_dir)["tickets"]
 
+    def native_placement(self, ticket_id):
+        """(repository, component) as the store holds them natively, or None if the
+        store cannot show that; the placement section is skipped without it."""
+        return None
+
     def need(self, capability):
         if not ticket_store.has(self.store(), capability):
             self.skipTest(f"store does not declare {capability}")
@@ -172,6 +177,13 @@ class StoreContract:
         store.write(self.run_dir, st, before, after)
         self.assertEqual(self.tickets()[self.a]["status"], "running")
 
+    def test_placement_is_held_natively(self):
+        self.need("placement")
+        placed = self.native_placement(self.a)
+        if placed is None:
+            self.skipTest("store gives no native view of placement")
+        self.assertEqual(placed, ("svc", "core"))
+
     def test_review_states_complete_a_verified_ticket(self):
         self.need("review-states")
         state.set_ticket(self.run_dir, self.a, status="running")
@@ -205,6 +217,12 @@ class OrbitStoreContract(StoreContract, unittest.TestCase):
     def store_record(self):
         return {"kind": "orbit", "config": {
             "anchor": str(self.anchor), "names": adapter_defaults(ROOT / "trackers/orbit.md")}}
+
+    def native_placement(self, ticket_id):
+        done = subprocess.run(["orbit", "--dir", str(self.anchor), "show", ticket_id, "--json"],
+                              cwd=self.anchor, capture_output=True, text=True)
+        issue = json.loads(done.stdout)["data"]
+        return issue.get("repository"), issue.get("component")
 
     def prepare(self, anchor):
         for args in (["init", "."], ["setup", str(ROOT / "profiles" / "kinetic.toml")]):

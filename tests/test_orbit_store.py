@@ -872,3 +872,22 @@ class OrbitSpecEndToEndTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlacementNamesTest(unittest.TestCase):
+    """Orbit rejects a whole batch over one invalid repository or component name."""
+
+    def test_a_slice_title_becomes_a_component_slug(self):
+        self.assertEqual(orbit_store._component("Core Slice: API"), "core-slice-api")
+
+    def test_a_component_is_capped_to_what_orbit_accepts(self):
+        self.assertLessEqual(len(orbit_store._component("a" * 80)), 32)
+
+    def test_an_unusable_component_is_left_out(self):
+        self.assertIsNone(orbit_store._component("???"))
+
+    def test_a_repository_orbit_would_reject_is_left_out(self):
+        self.assertEqual(orbit_store._repository("svc"), "svc")
+        self.assertEqual(orbit_store._repository("my-repo.v2"), "my-repo.v2")
+        for bad in ("", ".hidden", "-x", "my repo!", "a" * 65, None):
+            self.assertIsNone(orbit_store._repository(bad), bad)
