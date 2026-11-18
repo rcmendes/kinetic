@@ -127,6 +127,23 @@ def tickets_rollup(tickets: dict) -> dict:
     return out
 
 
+class HumanQuestion(TicketStore, Protocol):
+    """The `human-question` capability: a question parked on a person lives in the store."""
+
+    def ask(self, run_dir, st: dict, ticket_id: str, question: str) -> None:
+        """Record an open question on the ticket and move it to `needs_decision`."""
+
+    def answer(self, run_dir, st: dict, ticket_id: str, answer: str) -> None:
+        """Record the answer, close the question and return the ticket to the status it
+        had before it was asked. Refused when no question is open on the ticket."""
+
+    def open_questions(self, run_dir, st: dict) -> list:
+        """[{"id", "question", "at"}] for every unanswered question of the run."""
+
+
+ASKABLE = ("todo", "running", "in_review", "blocked")
+
+
 class ScheduleHints(TicketStore, Protocol):
     """The `schedule-hints` capability: the store may suggest an order for ready tickets."""
 
@@ -158,7 +175,32 @@ class LocalTicketStore:
         return None
 
     def capabilities(self) -> frozenset:
-        return frozenset({"query"})
+        return frozenset({"query", "human-question"})
+
+    # The ask/answer machine, kept in state.json: state.save persists it.
+    def ask(self, run_dir, st: dict, ticket_id: str, question: str) -> None:
+        from datetime import datetime, timezone
+        ticket = st["tickets"][ticket_id]
+        if ticket["status"] not in ASKABLE:
+            raise ValueError(f"cannot ask on {ticket_id}: it is {ticket['status']}")
+        st.setdefault("questions", []).append({
+            "id": ticket_id, "question": question, "return_to": ticket["status"],
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+        ticket["status"] = "needs_decision"
+
+    def answer(self, run_dir, st: dict, ticket_id: str, answer: str) -> None:
+        from datetime import datetime, timezone
+        asked = next((q for q in st.get("questions", [])
+                      if q["id"] == ticket_id and "answer" not in q), None)
+        if asked is None:
+            raise ValueError(f"no open question on {ticket_id}")
+        asked["answer"] = answer
+        asked["answered_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        st["tickets"][ticket_id]["status"] = asked["return_to"]
+
+    def open_questions(self, run_dir, st: dict) -> list:
+        return [{"id": q["id"], "question": q["question"], "at": q["at"]}
+                for q in st.get("questions", []) if "answer" not in q]
 
     def rollup(self, run_dir, st: dict) -> dict:
         return tickets_rollup(st.get("tickets", {}))

@@ -512,7 +512,30 @@ class OrbitTicketStore:
     # -- staged tickets --
     def capabilities(self) -> frozenset:
         return frozenset({"review-states", "checkpoint", "schedule-hints",
-                          "query", "idempotent-write", "placement"})
+                          "query", "idempotent-write", "placement",
+                          "human-question"})
+
+    def ask(self, run_dir, st: dict, ticket_id: str, question: str) -> None:
+        self._resume_pending(st)
+        self._batch(st, [{"op": "ask", "id": ticket_id, "question": question,
+                          "by": holder(st["run_id"], ticket_id, "implementer")}])
+
+    def answer(self, run_dir, st: dict, ticket_id: str, answer: str) -> None:
+        self._resume_pending(st)
+        issue = call(self._anchor(st), ["show", ticket_id])
+        ask = (issue.get("properties") or {}).get("orbit", {}).get("ask")
+        if not ask or "answer" in ask:
+            raise ValueError(f"no open question on {ticket_id}")
+        self._batch(st, [{"op": "answer", "id": ticket_id, "answer": answer,
+                          "by": holder(st["run_id"])}])
+
+    def open_questions(self, run_dir, st: dict) -> list:
+        out = []
+        for issue in self._issues(st):
+            ask = (issue.get("properties") or {}).get("orbit", {}).get("ask")
+            if ask and "answer" not in ask:
+                out.append({"id": issue["id"], "question": ask["question"], "at": ask["at"]})
+        return out
 
     def rollup(self, run_dir, st: dict) -> dict:
         """Ticket counts from one `digest` of the spec; slices are subtracted from its subtree."""

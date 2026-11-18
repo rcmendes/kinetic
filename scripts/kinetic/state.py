@@ -473,6 +473,49 @@ def record_checkpoint(run_dir, ticket_id: str, progress: str, next: str | None =
     return {"id": tid, "recorded": True}
 
 
+def ask_question(run_dir, ticket_id: str, question: str) -> dict:
+    """Park a question on a person: the ticket becomes `needs_decision`. A store that keeps
+    questions records it; one that does not only gets the status change, as before."""
+    if not question.strip():
+        raise ValueError("a question needs text")
+    with _locked(run_dir):
+        st = load(run_dir)
+        tid = _alias(st, ticket_id)
+        if tid not in st["tickets"]:
+            raise ValueError(f"unknown ticket {ticket_id}")
+        store = ticket_store.for_state(st)
+        recorded = ticket_store.has(store, "human-question")
+        if recorded:
+            store.ask(run_dir, st, tid, question)
+            save(run_dir, st)
+    if not recorded:
+        set_ticket(run_dir, tid, status="needs_decision")
+    return {"id": tid, "recorded": recorded}
+
+
+def answer_question(run_dir, ticket_id: str, answer: str) -> dict:
+    """Close the open question on a ticket; it returns to the status it had when asked."""
+    if not answer.strip():
+        raise ValueError("an answer needs text")
+    with _locked(run_dir):
+        st = load(run_dir)
+        tid = _alias(st, ticket_id)
+        store = ticket_store.for_state(st)
+        if not ticket_store.has(store, "human-question"):
+            return {"id": tid, "recorded": False}
+        store.answer(run_dir, st, tid, answer)
+        save(run_dir, st)
+    return {"id": tid, "recorded": True}
+
+
+def open_questions(run_dir) -> list:
+    st = load(run_dir, tickets=False)
+    store = ticket_store.for_state(st)
+    if not ticket_store.has(store, "human-question"):
+        return []
+    return store.open_questions(run_dir, st)
+
+
 def last_checkpoint(run_dir, ticket_id: str) -> dict | None:
     st = load(run_dir, tickets=False)
     store = ticket_store.for_state(st)
@@ -659,6 +702,9 @@ def main(argv=None) -> int:
     cmd("checkpoint", ("--id", {"required": True}), ("--progress", {"required": True}),
         ("--next", {"default": None}), ("--blocker", {"default": None}))
     cmd("last-checkpoint", ("--id", {"required": True}))
+    cmd("ask", ("--id", {"required": True}), ("--question", {"required": True}))
+    cmd("answer", ("--id", {"required": True}), ("--answer", {"required": True}))
+    cmd("questions")
     cmd("record-edit", ("--path", {"required": True}))
     cmd("record-gate", ("--gate", {"required": True}), ("--approved", {"type": _bool, "required": True}),
         ("--note", {"default": ""}))
@@ -702,6 +748,12 @@ def main(argv=None) -> int:
             out = record_review(a.run, a.id, a.axis, a.verdict, a.reason)
         elif a.cmd == "checkpoint":
             out = record_checkpoint(a.run, a.id, a.progress, a.next, a.blocker)
+        elif a.cmd == "ask":
+            out = ask_question(a.run, a.id, a.question)
+        elif a.cmd == "answer":
+            out = answer_question(a.run, a.id, a.answer)
+        elif a.cmd == "questions":
+            out = open_questions(a.run)
         elif a.cmd == "last-checkpoint":
             out = {"checkpoint": last_checkpoint(a.run, a.id)}
         elif a.cmd == "record-edit":
