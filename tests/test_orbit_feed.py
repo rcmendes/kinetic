@@ -17,10 +17,11 @@ class FeedTest(unittest.TestCase):
         self.run = Path(self.tmp.name)
         self.issue = {'id': 'orb-a', 'updated_at': 'v1', 'status': 'running',
                       'labels': ['kinetic-run-r'],
-                      'annotations': {'kinetic': dict(state.ticket_defaults(), status='running')}}
+                      'properties': {'kinetic': {'repo': 'api', 'kind': 'agent'}}}
         self.requests = []
         self.fail_batch = False
         self.conflict = False
+        self.events = []
         self.store = orbit_store.make({'anchor': str(self.run), 'published': True,
                                       'names': adapter_defaults(ROOT / 'trackers/orbit.md')})
         self.st = {'run_id': 'r', 'run_dir': str(self.run), 'slices': []}
@@ -35,7 +36,8 @@ class FeedTest(unittest.TestCase):
             data = {'contract': '1.0.0', 'board': {'contract': '1.0.0', 'compatible': True},
                     'capabilities': sorted(orbit_store.REQUIRED_CAPABILITIES), 'modules': []}
         elif command == 'changes':
-            data = {'cursor': 'head', 'events': []}
+            data = {'cursor': 'head', 'events': self.events}
+
         elif command == 'list':
             data = {'issues': [self.issue]}
         elif command == 'show':
@@ -83,3 +85,12 @@ class FeedTest(unittest.TestCase):
         batches = [k for a, k in self.requests if a[3] == 'batch']
         self.assertEqual(len(batches), 2)
         self.assertEqual(json.loads(batches[-1]['input'])['operations'][0]['if_version'], 'v2')
+
+    def test_new_store_instance_resumes_durable_snapshot_and_fetches_changes(self):
+        self.store.read(self.run, self.st)
+        self.issue['properties']['kinetic']['worktree'] = '/new'
+        self.events = [{'kind': 'issue.updated', 'issue': 'orb-a'}]
+        restored = orbit_store.make(dict(self.store.config))
+        self.assertEqual(restored.read(self.run, self.st)['orb-a']['worktree'], '/new')
+        self.issue['labels'] = []
+        self.assertEqual(restored.read(self.run, self.st), {})

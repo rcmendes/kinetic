@@ -62,3 +62,24 @@ class HierarchyTest(unittest.TestCase):
                              ('epic', None, 'needs_decision'))
             self.assertTrue(any(link.get('target') == user and not link['blocking'] for link in spec['links']))
             self.assertEqual(orbit_json(board, 'show', user)['status'], 'todo')
+
+    def test_native_three_level_hierarchy_keeps_spec_open_after_slice_finishes(self):
+        from tests.test_orbit_store import make_orbit_run, orbit_json
+        from kinetic import state
+        with tempfile.TemporaryDirectory() as tmp:
+            run, board = make_orbit_run(Path(tmp))
+            orbit_json(board, 'setup', str(ROOT / 'profiles/kinetic.toml'))
+            (run / 'spec.md').write_text('# Feature\n\nImplement the request.')
+            spec = state.publish_spec(run, 'Feature')['ref']
+            state.record_gate(run, 'spec', True)
+            state.set_slices(run, ['slice'])
+            state.set_ticket(run, 'human', repo='api', slice='slice', kind='human')
+            ids = state.publish_tickets(run)
+            shown_slice = orbit_json(board, 'show', ids['slice'])
+            shown_ticket = orbit_json(board, 'show', ids['human'])
+            self.assertEqual((shown_slice['type'], shown_slice['parent']), ('task', spec))
+            self.assertEqual((shown_ticket['type'], shown_ticket['parent']),
+                             ('sub-task', ids['slice']))
+            state.human_done(run, ids['human'])
+            self.assertEqual(orbit_json(board, 'show', ids['slice'])['status'], 'done')
+            self.assertEqual(orbit_json(board, 'show', spec)['status'], 'todo')
