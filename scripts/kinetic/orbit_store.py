@@ -493,7 +493,58 @@ class OrbitTicketStore:
 
     # -- staged tickets --
     def capabilities(self) -> frozenset:
-        return frozenset({"review-states", "checkpoint", "schedule-hints"})
+        return frozenset({"review-states", "checkpoint", "schedule-hints",
+                          "query", "idempotent-write"})
+
+    def rollup(self, run_dir, st: dict) -> dict:
+        """Ticket counts from one `digest` of the spec; slices are subtracted from its subtree."""
+        from kinetic.ticket_store import tickets_rollup
+        spec = self._spec_id(st)
+        if not spec:
+            return tickets_rollup(self.read(run_dir, st))
+        digest = call(self._anchor(st), ["digest", spec])
+        counts = digest["rollup"]
+        # Orbit's `open` includes the blocked ones; the contract counts them apart.
+        out = {"done": counts["done"], "blocked": counts["blocked"],
+               "open": counts["open"] - counts["blocked"], "cancelled": counts["cancelled"],
+               "total": counts["total"]}
+        for slice_ in digest.get("children") or []:
+            if slice_.get("blocked"):
+                kind = "blocked"
+            elif slice_["status"] in DONE:
+                kind = "done"
+            elif slice_["status"] == "cancelled":
+                kind = "cancelled"
+            else:
+                kind = "open"
+            out[kind] -= 1
+            out["total"] -= 1
+        return out
+
+    def changes(self, run_dir, st: dict, cursor) -> dict:
+        """Ids of the run's tickets that changed since `cursor`, from Orbit's change feed."""
+        ids = list(self.read(run_dir, st))
+        anchor = self._anchor(st)
+
+        def feed(since):
+            events, args = [], ["changes"] + (["--since", since] if since else [])
+            while True:
+                page = call(anchor, args)
+                events += page.get("events") or []
+                if not page.get("truncated"):
+                    return page["cursor"], events
+                args = ["changes", "--since", page["cursor"]]
+
+        try:
+            head, events = feed(cursor)
+        except OrbitStoreError as error:
+            if cursor is None or error.code not in ("INVALID_ARGUMENT", "INVALID_CURSOR"):
+                raise
+            return {"cursor": feed(None)[0], "ids": ids}  # unknown cursor: report everything
+        if cursor is None or any(e.get("type") == "board.changed" for e in events):
+            return {"cursor": head, "ids": ids}
+        touched = {e["issue"] for e in events if e.get("issue")}
+        return {"cursor": head, "ids": [i for i in ids if i in touched]}
 
     def stage_path(self, run_dir) -> Path:
         from kinetic.state import internal
