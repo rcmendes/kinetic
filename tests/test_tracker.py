@@ -148,14 +148,17 @@ class OrbitTrackerTest(unittest.TestCase):
     def test_orbit_resolves_with_defaults(self):
         r = self._resolve({"tracker": "orbit"})
         self.assertEqual(r["tracker"], "orbit")
-        self.assertEqual(r["names"]["hold"], "kinetic")
+        self.assertNotIn("hold", r["names"])
         self.assertEqual(r["names"]["run"], "kinetic-run-<run id>")
         self.assertEqual(r["names"]["kind"]["human"], "ready-for-human")
-        self.assertEqual(r["names"]["ships_with"], "ships-with-<group>")
+        self.assertEqual(r["names"]["ships_with"], "ships-with")
+        self.assertEqual(r["names"]["status"]["running"], "running")
+        self.assertEqual(r["names"]["status"]["blocked"], "blocked")
+        self.assertEqual(r["names"]["status"]["merged"], "merged")
 
     def test_orbit_names_override(self):
-        r = self._resolve({"tracker": "orbit", "tracker_names": {"hold": "held-by-run"}})
-        self.assertEqual(r["names"]["hold"], "held-by-run")
+        r = self._resolve({"tracker": "orbit", "tracker_names": {"run": "run-<run id>"}})
+        self.assertEqual(r["names"]["run"], "run-<run id>")
 
     def test_store_record_for_local_trackers(self):
         from kinetic import ticket_store
