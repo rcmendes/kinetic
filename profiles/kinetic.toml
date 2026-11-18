@@ -55,3 +55,12 @@ max_attempts = 4
 transition = "request_changes"
 profiles = ["kinetic"]
 distinct_from = ["author"]
+
+# Orbit-only guard that matches kinetic's default parallel cap (frontier.py, --cap 3).
+# frontier.py stays the rule for every store; this only stops another tool on the same
+# Board from starting a fourth ticket while three are running.
+[[policy.rules]]
+name = "kinetic-wip"
+transition = "claim"
+profiles = ["kinetic"]
+wip_limit = { status = "running", max = 3 }
