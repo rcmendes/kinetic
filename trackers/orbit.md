@@ -1,70 +1,79 @@
 # Tracker adapter: Orbit
 
-Access: the `orbit` CLI, always with `--json` and `--dir <anchor>`. Optional setting: `orbit_dir` (`tracker_settings.orbit_dir`), the Board anchor or Board folder. Without it the anchor is the project folder (the one holding `.kinetic/`, `bare-repos/` and `runs/`). The Orbit Board needs `names.hold` (default `kinetic`) in `non_ready_labels` and must allow three levels of nesting (`max_subtask_depth = 2` under `[board]`) in its `config.toml`; doctor checks both.
+Access: the `orbit` CLI, always with `--json` and `--dir <anchor>`. Optional setting: `orbit_dir` (`tracker_settings.orbit_dir`), the Board anchor or Board folder. Without it the anchor is the project folder (the one holding `.kinetic/`, `bare-repos/` and `runs/`). Use `orbit capabilities` to negotiate the contract and enabled modules before accessing Issues. Install the native workflow with `orbit setup kinetic`; doctor checks the workflow and the configured `board.hierarchy`.
 
-With this tracker the run's tickets live on the Orbit Board: the Orbit ticket store reads and writes them, and kinetic state is not a separate copy. This adapter publishes staged tickets: during decompose, follow the Local steps (ticket files and `NN-<repo>-<slug>` ids); when the breakdown gate is approved, kinetic publishes every staged ticket in one `orbit batch`, and from then on a ticket id is its Orbit Task ID.
+The run's published tickets live on the Orbit Board. During decompose, follow the Local steps (ticket files and `NN-<repo>-<slug>` IDs); approval of the breakdown gate publishes staged tickets in one `orbit batch`. Published ticket references are Orbit Issue IDs. Never edit Issue files by hand or run `orbit ready --claim` for a kinetic ticket: kinetic schedules its own tickets.
 
-Never edit Orbit Task files by hand, and never run `orbit ready --claim` for a kinetic ticket: kinetic schedules its own tickets.
+A run started from an existing user Issue never claims, moves or closes that Issue. It creates its own top-level spec epic and a non-blocking `relates-to` link to the user's Issue. The spec, slice and ticket use the native hierarchy: `epic` > `task` > `sub-task`. Parentage is separate from blocking links.
 
-A run whose ref is an existing Orbit Task (for example `/kinetic:implement orb-a7b2c9`) does not take that Task over: kinetic never claims it, never moves its status and never closes it; the user does. Its only write to that Task is one comment naming the run folder. The run's spec Task is a top-level `epic`, so it cannot nest under that Task either; kinetic files its own spec, slices and tickets for the run, and links the tickets to the original Task with `related`.
-
-After the breakdown gate, a ticket kinetic adds later (a `NEEDS_HUMAN` ticket, a review fix) goes to the Board in the same write that records it, and its provisional id keeps working with `kinetic state` commands.
+After publication, later tickets (human work or review fixes) are created in the same batch as the state write; provisional IDs remain valid with `kinetic state` commands. Tool-specific metadata belongs in the `kinetic` Property. Native status, assignee, lease, parent and links remain authoritative for those fields.
 
 ## Operations
 
 ### create spec
-`kinetic state publish-spec` (after spec lint) creates the run's spec Task: a top-level Task of type `epic` with Source Key `kinetic:<run id>:spec`, the labels `names.run`, `names.spec` and the hold label `names.hold`, the `kinetic` Annotation `{"role": "spec", "run": "<run id>", "phase": "awaiting-approval"}` and `waiting_on` "kinetic: spec approval" while the spec gate is open. Its body is a copy of `spec.md` whose first line says it is generated: edit the file and publish again; the same Source Key makes republishing rewrite the Task instead of adding another.
 
-### sync spec
-Done by kinetic, never by hand. Recording the spec gate (`kinetic state record-gate --gate spec`) updates the spec Task: approval clears `waiting_on` and sets the Annotation `phase` to `approved`, rejection clears it and sets `revising`, and publishing again puts `waiting_on` back with `phase` `awaiting-approval`. An approved breakdown gate sets `phase` to `building`, and the Batch that finishes the run's last slice marks the spec Task `done`.
+`kinetic state publish-spec` publishes `spec.md` as a top-level Issue of type `epic`, using Source Key `kinetic:<run id>:spec`. Its body identifies the file as generated: edit `spec.md` and publish again. A Source Key makes retries find the same Issue. The spec gate and run lifecycle use the native workflow and the `kinetic` Property for phase metadata.
 
 ### create slice parent
-Done by publishing. When the run has a spec Task (see create spec), each slice becomes a plain Task nested under it, with the `kinetic` Annotation `{"role": "slice", "spec": "<spec task id>"}` — spec, slice and ticket are three levels, which needs `max_subtask_depth = 2` in the Board's `config.toml`, checked by doctor. Runs published before spec Tasks existed keep the old shape: each slice is a Parent Task with type `epic`. When the run recorded a spec (`kinetic state set-spec`), the slice also carries it in its `kinetic` Annotation (`{"spec": "<ref>"}`), so `orbit show <slice>` names the spec; with no spec recorded the Annotation is not written. Orbit itself has no spec concept: nothing changes for Boards that kinetic does not use.
+
+Publishing creates an Issue of type `task` with the spec epic as its parent. Direct CLI equivalent: `orbit add <title> --type task --parent <spec id> --source-key <key> --body-file -`. The configured hierarchy must allow this relationship.
 
 ### create child
-Record the ticket with `kinetic state set-ticket` (it is staged); publishing makes it a SubTask of its slice Task, with every ticket field in its `kinetic` Annotation.
+
+`kinetic state set-ticket` stages a ticket; publishing creates an Issue of type `sub-task` under its slice. Direct CLI equivalent: `orbit add <title> --type sub-task --parent <slice id> --source-key <key> --body-file -`.
 
 ### link blocker
-Record `blocked_by` with its edge type with `set-ticket`. The ticket store writes an Orbit dependency and keeps the edge type in the ticket's `kinetic` Annotation.
+
+Record `blocked_by` with its edge type using `set-ticket`. Store a blocking `blocks` link to the prerequisite, with the edge type (`snapshot`, `merge` or `release`) in its `edge` attribute. CLI equivalent: `orbit link add <ticket> --type blocks --to <prerequisite> --attribute edge=snapshot`.
 
 ### link after
-Record `after` with `set-ticket` (kept in the Annotation; no Orbit dependency).
+
+Record `after` with `set-ticket`. Store an `after` link to the other Issue with `--no-blocking`; ordering does not create a blocking dependency.
 
 ### link ships-with
-Record `ships_with` with `set-ticket`; the ticket store adds the label `names.ships_with`.
+
+Record `ships_with` with `set-ticket`. Store non-blocking `ships-with` links between the grouped Issues, with the group in a link attribute.
 
 ### link related
-Record `related` with `set-ticket` (kept in the Annotation).
+
+Record `related` with `set-ticket`. Store non-blocking `relates-to` links. The run's spec links to an existing user Issue this way.
 
 ### set kind
-Record `kind` with `set-ticket`; a human ticket carries the label `names.kind.human`.
+
+Record `kind` with `set-ticket` in the `kinetic` Property. Kind does not change the Issue's workflow status.
 
 ### move status
-Record `status` with `set-ticket` (or `human-done`); the ticket store derives the Orbit status, claim, waiting reason and labels in one batch.
+
+Record `status` with `set-ticket` (or `human-done`). The ticket store runs the appropriate native workflow transition in the state batch. Status names are `todo`, `running`, `needs_decision`, `done_with_concerns`, `blocked`, `done`, `merged` and `released`; they are not labels or aliases for `in_progress`. Inspect `orbit show` for `allowed_transitions`; the direct command is `orbit transition <id> <transition> --by <identity>`. Review uses `submit` and `review`, with evidence, rather than setting a terminal status directly.
 
 ### assign to user
-Nothing to do: a human ticket is held by `names.kind.human`, and a person finishes it with `orbit done <id>`.
+
+Use `orbit assign <id> --to <person>` for an assignee without a lease. Implementers and reviewers use distinct identities for work and reviews; `orbit heartbeat <id> --by <identity>` renews the active worker's lease. A human completes work through the Board's workflow.
 
 ### fetch
-`orbit show <id> --json --dir <anchor>`: title, body, labels, status, Annotations and comments.
+
+`orbit show <id> --json --dir <anchor>` returns the Issue body, status, assignee, lease, properties, links, allowed transitions and comments. `orbit changes --since <cursor>` refreshes cached state after the initial snapshot.
 
 ### comment
-`orbit comment add <id> --by kinetic-<run id> --body-file - --dir <anchor>`, with the comment on stdin.
+
+`orbit comment add <id> --by <identity> --body-file - --dir <anchor>`, with the comment on stdin. Writes use optimistic versions and idempotency keys in `orbit batch` so retries cannot silently overwrite another writer or duplicate work.
 
 ### ticket reference
-The Orbit Task ID, for example `orb-a7b2c9.d4b3df`.
+
+The Orbit Issue ID or project key returned by Orbit, for example `orb-a7b2c9` or `ORB-12`. IDs do not encode hierarchy; use `parent` and links to navigate.
 
 ## Default names
+
+These names describe native links and statuses. Run/spec labels identify kinetic content; they do not control readiness.
 
 ```json
 {
   "kind": {"agent": "", "human": "ready-for-human"},
-  "edge": {"snapshot": "", "merge": "", "release": ""},
-  "after": "",
-  "ships_with": "ships-with-<group>",
-  "related": "",
-  "status": {"todo": "todo", "running": "in_progress", "done": "done", "merged": "done", "blocked": "in_progress"},
-  "hold": "kinetic",
+  "edge": {"snapshot": "snapshot", "merge": "merge", "release": "release"},
+  "after": "after",
+  "ships_with": "ships-with",
+  "related": "relates-to",
+  "status": {"todo": "todo", "running": "running", "needs_decision": "needs_decision", "done_with_concerns": "done_with_concerns", "blocked": "blocked", "done": "done", "merged": "merged", "released": "released"},
   "run": "kinetic-run-<run id>",
   "spec": "kinetic-spec"
 }
