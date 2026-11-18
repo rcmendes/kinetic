@@ -8,7 +8,7 @@
       "name": "kinetic",
       "source": "./",
       "description": "SDLC pipeline: grill, spec, tickets, multi-repo build, review, ship, retro",
-      "version": "0.6.0"
+      "version": "0.7.0"
     }
   ]
 }

@@ -1,6 +1,6 @@
 # kinetic
 
-kinetic is a plugin that drives a software change from idea to draft PRs across one or more repositories: grill the idea, write a spec, split it into tickets with typed dependency edges, build each ticket with an isolated implementer, review, ship, and run a retro. It runs inside Claude Code and Devin CLI (Codex CLI and OpenCode support is in progress).
+kinetic is a plugin that drives a software change from idea to draft PRs across one or more repositories: grill the idea, write a spec, split it into tickets with typed dependency edges, build each ticket with an isolated implementer, review, ship, and run a retro. It runs inside Claude Code. Installers also exist for Devin CLI, Codex CLI and OpenCode, but their live smoke checklists (`docs/smoke/`) have not been run, so treat those three as unverified (see [Status](#status-and-known-limitations)).
 
 The split of work is deliberate:
 
@@ -45,7 +45,7 @@ Requirements: macOS or Linux, Python 3.9+, `git`, and `gh` authenticated to GitH
 Every harness installs from a checkout, because `kinetic install` links the CLI and generates harness files from it:
 
 ```
-git clone git@github.com:apoema-ai/kinetic.git ~/code/kinetic
+git clone git@github.com:rcmendes/kinetic.git ~/code/kinetic
 ```
 
 Then run `kinetic install --harness <claude|devin|codex|opencode>` as described below. Every install:
@@ -64,7 +64,7 @@ Via the repo's plugin marketplace (`.claude-plugin/marketplace.json`):
 
 ```
 ~/code/kinetic/bin/kinetic install --harness claude
-claude plugin marketplace add apoema-ai/kinetic
+claude plugin marketplace add rcmendes/kinetic
 claude plugin install kinetic@kinetic
 ```
 
@@ -155,6 +155,13 @@ kinetic doctor --harness <h>
 ```
 
 Failing checks print the fix. Then continue with the [quick start](#quick-start).
+
+### 7. Update
+
+- **Marketplace install (Claude Code):** `claude plugin marketplace update kinetic`, then `claude plugin update kinetic@kinetic`, then `kinetic install --harness claude` again so the generated files match. Claude Code keeps each installed version in its own folder (`~/.claude/plugins/cache/kinetic/kinetic/<version>`), so every release bumps the version in `.claude-plugin/plugin.json`; a change merged without a bump may not reach marketplace users.
+- **Checkout install:** `git pull`, then re-run `kinetic install --harness <h>` for each harness you use.
+- Check with `kinetic doctor`: it reports a stale install. Releases are described in [docs/RELEASING.md](docs/RELEASING.md).
+- Orbit users: version 0.7.0 needs Orbit 0.11.0 or later, and a Board made before it needs `orbit migrate model --apply` (see the Orbit section).
 
 Optional companions that kinetic uses when present and falls back without: the `resolving-merge-conflicts` skill and the `superpowers` and `dev-fleet` plugins, installed wherever the harness keeps skills and plugins (`~/.claude/skills` and `~/.claude/plugins` on Claude Code; `~/.config/devin/skills` or `~/.agents/skills` and `devin plugins install` on Devin; `~/.agents/skills` on Codex). `/kinetic:doctor` reports which are missing.
 
@@ -485,6 +492,21 @@ Ship fills one template for every PR. The default is `templates/pr-body.md`. To 
 | `/kinetic:catalog-setup [folder]` | Detects and saves the repo catalog folder |
 | `/kinetic:catalog-refresh <keys...> \| --query <q> \| --run <dir>` | Learns repo labels and recipes from merged deliverables; writes only what you approve |
 
+### Run-state commands
+
+Skills call these; you can too. All take `--run <run_dir>`.
+
+| Command | What it does |
+|---|---|
+| `kinetic status --run <dir> [--summary]` | The run's tickets, frontier and gates; each ticket shows a `P0` to `P3` priority, the rank of how much work waits behind it. `--summary` prints only lane, phase, progress counts and gates, asking the ticket store for the counts instead of reading every ticket |
+| `kinetic state ask --id <ticket> --question "..."` | Parks a ticket on a person as `needs_decision` and records the question where the ticket store keeps questions |
+| `kinetic state answer --id <ticket> --answer "..."` | Closes the question and returns the ticket to the status it had |
+| `kinetic state questions` | Lists the run's open questions |
+| `kinetic state checkpoint --id <ticket> --progress "..." [--next ...] [--blocker ...]` | Records a ticket's handoff so a crashed or replaced implementer can resume; `last-checkpoint --id <ticket>` reads it. A store without checkpoints reports `recorded: false` and nothing changes |
+| `kinetic state submit-review`, `record-review` | Review evidence and verdicts (see the Orbit section) |
+
+A ticket store only offers what its tracker can do. Stores declare optional capabilities and kinetic falls back to its own behaviour for the rest, so the local store and a store written later behave predictably. [docs/stores.md](docs/stores.md) lists the capabilities and how to write a store.
+
 ## Skills and agents
 
 | Name | Kind | Model | Role |
@@ -663,10 +685,12 @@ The suite covers every script module and every hook, plus an end-to-end test tha
 
 ## Status and known limitations
 
-kinetic is at 0.6.0 (see `.claude-plugin/plugin.json`). This release uses native Orbit contracts, workflows, links, hierarchy, role identities, review evidence and incremental reads. Existing runs have an explicit migration path; local ticket stores retain their behavior. Scripted temporary-Board integration checks cover publication, migration and reviews. Live harness acceptance remains a separate smoke test. `docs/plan/kinetic-v0-rulings.md` records the original design decisions.
+kinetic is at 0.7.0 (see `.claude-plugin/plugin.json`). This release uses native Orbit contracts, workflows, links, hierarchy, role identities, review evidence and incremental reads. Existing runs have an explicit migration path; local ticket stores retain their behavior. Scripted temporary-Board integration checks cover publication, migration and reviews. Live harness acceptance remains a separate smoke test. `docs/plan/kinetic-v0-rulings.md` records the original design decisions.
 
 Not yet verified in a live session:
 
+- Devin CLI, Codex CLI and OpenCode: the installers and doctor checks exist, but the results tables in `docs/smoke/devin.md`, `codex.md` and `opencode.md` are empty. Claude Code is the harness that has been run;
+- a full run with real agents on the native Orbit store (a scripted run through the public API passed, see `docs/smoke/orbit.md`);
 - that `kinetic` is on PATH wherever skills and agents run it;
 - that `skills: [tdd]` resolves to kinetic's own `tdd` skill;
 - whether subagent hook payloads carry the parent session id (the cwd rule covers implementers either way);
