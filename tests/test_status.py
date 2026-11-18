@@ -32,10 +32,10 @@ class StatusTest(unittest.TestCase):
         }))
         self.assertIn("feature", out.splitlines()[0])
         self.assertIn("build", out.splitlines()[0])
-        self.assertIn("| id | kind | repo | status | blocked by |", out)
+        self.assertIn("| id | kind | repo | status | priority | blocked by |", out)
         self.assertLess(out.index("Waiting on you:"), out.index("| id | kind"))
-        self.assertIn("| A-1 | agent | api | done | — |", out)
-        self.assertIn("| B-2 | agent | web | todo | A-1 (merge), C (snapshot) |", out)
+        self.assertIn("| A-1 | agent | api | done | P0 | — |", out)
+        self.assertIn("| B-2 | agent | web | todo | P1 | A-1 (merge), C (snapshot) |", out)
 
     def test_stuck_ticket_is_reported(self):
         stuck = dict(t("api", "running"), liveness="stuck")
@@ -58,7 +58,7 @@ class StatusTest(unittest.TestCase):
              "kind": "human"}
         out = status.render(S({"H": h}))
         self.assertIn("Waiting on you: H", out)
-        self.assertIn("| H | human | — | todo | — |", out)
+        self.assertIn("| H | human | — | todo | P0 | — |", out)
         self.assertIn("Waiting on you: none", status.render(S({"A": t("api")})))
 
     def test_render_gates(self):
@@ -74,7 +74,7 @@ class StatusTest(unittest.TestCase):
                                capture_output=True, text=True,
                                env={**os.environ, "PYTHONPATH": str(ROOT / "scripts")})
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("| X-1 | agent | api | todo | — |", r.stdout)
+            self.assertIn("| X-1 | agent | api | todo | P0 | — |", r.stdout)
 
 
 if __name__ == "__main__":
@@ -136,3 +136,10 @@ class SummaryTest(unittest.TestCase):
                                "--summary"], capture_output=True, text=True, env=env)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("Progress:", done.stdout)
+
+
+class PriorityColumnTest(unittest.TestCase):
+    def test_status_shows_the_rank_of_each_ticket(self):
+        out = status.render(S({"A": t("api"), "B": t("api", "todo", [{"id": "A", "type": "merge"}])}))
+        self.assertIn("| A | agent | api | todo | P0 | — |", out)
+        self.assertIn("| B | agent | api | todo | P1 | A (merge) |", out)
