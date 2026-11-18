@@ -18,7 +18,8 @@ LOCAL = {"kind": "local"}
 # capability's methods only after has(store, name); without it, kinetic does
 # what it did before the capability existed.
 #   review-states  record_verify, submit_review, record_review
-CAPABILITIES = frozenset({"review-states"})
+#   checkpoint     checkpoint, last_checkpoint
+CAPABILITIES = frozenset({"review-states", "checkpoint"})
 
 
 class TicketStoreError(Exception):
@@ -67,6 +68,17 @@ class ReviewStates(TicketStore, Protocol):
     def record_review(self, run_dir, st: dict, ticket_id: str, axis: str,
                       verdict: str, reason: str = "") -> None:
         """Record an independent review and apply its native verdict."""
+
+
+class Checkpoints(TicketStore, Protocol):
+    """The `checkpoint` capability: a ticket's handoff state lives in the store."""
+
+    def checkpoint(self, run_dir, st: dict, ticket_id: str, progress: str,
+                   next: str | None = None, blocker: str | None = None) -> None:
+        """Record the ticket's latest handoff; omitted fields keep their last value."""
+
+    def last_checkpoint(self, run_dir, st: dict, ticket_id: str) -> dict | None:
+        """The latest handoff ({"progress", "next", "blocker", "by", "at"}) or None."""
 
 
 class LocalTicketStore:

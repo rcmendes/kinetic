@@ -26,6 +26,7 @@ The orchestrator gives you these lines. If any is missing, report BLOCKED.
 - `Ticket file: <path>` (local mode only; read it instead of fetching)
 - `Report: <run_dir>/.kinetic/reports/<id>.md`
 - `Grant: <line>`
+- `Checkpoint: <text>` (optional: the last handoff the orchestrator recorded for this ticket, progress then next step then blocker; treat it as a hint and trust the worktree over it)
 - `Previous report: <path>`, `Ruling: <n>`, `Answer: <text>` (extra lines a fresh dispatch or resume may carry: the earlier report to read for context; the ruling's 1-based index in `<run_dir>/.kinetic/state.json`'s `rulings`; or a supplied answer)
 
 ## What you read

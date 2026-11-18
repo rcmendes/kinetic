@@ -442,6 +442,28 @@ def record_review(run_dir, ticket_id: str, axis: str, verdict: str, reason: str 
         return {"id": tid, "axis": axis, "verdict": verdict}
 
 
+def record_checkpoint(run_dir, ticket_id: str, progress: str, next: str | None = None,
+                      blocker: str | None = None) -> dict:
+    """The orchestrator records a ticket's handoff from the implementer's report."""
+    if not progress.strip():
+        raise ValueError("a checkpoint needs progress")
+    st = load(run_dir, tickets=False)
+    tid = _alias(st, ticket_id)
+    store = ticket_store.for_state(st)
+    if not ticket_store.has(store, "checkpoint"):
+        return {"id": tid, "recorded": False}
+    store.checkpoint(run_dir, st, tid, progress, next, blocker)
+    return {"id": tid, "recorded": True}
+
+
+def last_checkpoint(run_dir, ticket_id: str) -> dict | None:
+    st = load(run_dir, tickets=False)
+    store = ticket_store.for_state(st)
+    if not ticket_store.has(store, "checkpoint"):
+        return None
+    return store.last_checkpoint(run_dir, st, _alias(st, ticket_id))
+
+
 def record_edit(run_dir, path: str) -> None:
     try:
         _record_edit(run_dir, path)
@@ -617,6 +639,9 @@ def main(argv=None) -> int:
         ("--axis", {"choices": ("spec", "standards", "fix", "integration"), "required": True}),
         ("--verdict", {"choices": ("approve", "request-changes"), "required": True}),
         ("--reason", {"default": ""}))
+    cmd("checkpoint", ("--id", {"required": True}), ("--progress", {"required": True}),
+        ("--next", {"default": None}), ("--blocker", {"default": None}))
+    cmd("last-checkpoint", ("--id", {"required": True}))
     cmd("record-edit", ("--path", {"required": True}))
     cmd("record-gate", ("--gate", {"required": True}), ("--approved", {"type": _bool, "required": True}),
         ("--note", {"default": ""}))
@@ -658,6 +683,10 @@ def main(argv=None) -> int:
             out = submit_review(a.run, a.id, a.scope)
         elif a.cmd == "record-review":
             out = record_review(a.run, a.id, a.axis, a.verdict, a.reason)
+        elif a.cmd == "checkpoint":
+            out = record_checkpoint(a.run, a.id, a.progress, a.next, a.blocker)
+        elif a.cmd == "last-checkpoint":
+            out = {"checkpoint": last_checkpoint(a.run, a.id)}
         elif a.cmd == "record-edit":
             record_edit(a.run, a.path)
             out = {"last_edit_at": load(a.run)["last_edit_at"]}
