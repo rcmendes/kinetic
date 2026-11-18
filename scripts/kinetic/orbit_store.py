@@ -630,6 +630,67 @@ class OrbitTicketStore:
             (Path(run_dir) / "issues" / f"{pid}.md").unlink(missing_ok=True)
         return mapping
 
+    def record_verify(self, run_dir, st: dict, ticket_id: str, evidence: dict) -> None:
+        if ticket_id in self._staged(run_dir):
+            return
+        # Orbit reserves evidence for submit; keep failed and pre-submit verify here.
+        self._batch(st, [{"op": "property", "id": ticket_id, "owner": "kinetic-verify", "value": evidence}])
+
+    def submit_review(self, run_dir, st: dict, ticket_id: str, evidence: list,
+                      scope: str = "ticket") -> None:
+        if scope not in ("ticket", "fix", "integration"):
+            raise ValueError("review scope must be ticket, fix or integration")
+        if not evidence or any(e.get("exit_code") != 0 for e in evidence):
+            raise ValueError("review requires a passing verify for every reviewed repo")
+        issue = call(self._anchor(st), ["show", ticket_id])
+        if issue["status"] == "in_review":
+            return
+        if issue["status"] != "running":
+            raise ValueError("submit review requires running work")
+        role = "orchestrator" if scope == "integration" else "implementer"
+        by = holder(st["run_id"], None if scope == "integration" else ticket_id, role)
+        self._batch(st, [
+            {"op": "submit", "id": ticket_id, "by": by,
+             "command": [e["command"] for e in evidence if e.get("command")],
+             "exit_code": 0, "file": [e["log_path"] for e in evidence]},
+            {"op": "property", "id": ticket_id, "owner": "kinetic-reviews",
+             "value": {"scope": scope, "verdicts": {}}},
+        ])
+
+    def record_review(self, run_dir, st: dict, ticket_id: str, axis: str,
+                      verdict: str, reason: str = "") -> None:
+        if axis not in ("spec", "standards", "fix", "integration"):
+            raise ValueError("review axis must be spec, standards, fix or integration")
+        if verdict not in ("approve", "request-changes"):
+            raise ValueError("review verdict must be approve or request-changes")
+        if verdict == "request-changes" and not reason.strip():
+            raise ValueError("request-changes requires a reason")
+        issue = call(self._anchor(st), ["show", ticket_id])
+        record = dict((issue.get("properties") or {}).get("kinetic-reviews") or {})
+        verdicts = dict(record.get("verdicts") or {})
+        if verdicts.get(axis) == {"verdict": verdict, "reason": reason}:
+            return
+        if issue["status"] != "in_review":
+            raise ValueError("record review requires submitted work")
+        expected_axes = {"ticket": ("spec", "standards"), "fix": ("fix",), "integration": ("integration",)}
+        if axis not in expected_axes.get(record.get("scope"), ()):
+            raise ValueError("review axis does not match the submitted scope")
+        verdicts[axis] = {"verdict": verdict, "reason": reason}
+        record["verdicts"] = verdicts
+        operations = [{"op": "property", "id": ticket_id, "owner": "kinetic-reviews", "value": record}]
+        approved = (axis in ("fix", "integration") or
+                    all(verdicts.get(a, {}).get("verdict") == "approve" for a in ("spec", "standards")))
+        if verdict == "request-changes" or approved:
+            operations.append({"op": "review", "id": ticket_id, "verdict": verdict,
+                               "reason": reason or None,
+                               "by": holder(st["run_id"], None if axis == "integration" else ticket_id,
+                                            axis + "-reviewer")})
+            if verdict == "approve" and axis != "integration":
+                before = st.get("tickets", {})
+                after = {**before, ticket_id: {**before.get(ticket_id, {}), "status": "done"}}
+                operations.extend(self._close_slices(st, self._staged(run_dir), before, after))
+        self._batch(st, operations)
+
     def touch(self, run_dir, st: dict, ticket_id: str) -> None:
         anchor = self._anchor(st)
         issue = call(anchor, ["show", ticket_id])

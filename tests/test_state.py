@@ -25,6 +25,18 @@ class StateTest(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.run_dir = Path(self._tmp.name) / "run"
 
+    def test_integration_review_requires_its_own_fresh_repo_verify(self):
+        state.init(self.run_dir, "feature", "E-1")
+        state.set_spec(self.run_dir, "owned-spec")
+        state.set_repo(self.run_dir, "api", "/tmp/api", "integration")
+        state.record_verify(self.run_dir, "ticket-a", 0, "/tmp/ticket.log", "api")
+        with self.assertRaisesRegex(ValueError, "fresh passing verify"):
+            state.submit_review(self.run_dir, "owned-spec", scope="integration")
+        state.record_verify(self.run_dir, None, 0, "/tmp/repo.log", "api")
+        self.assertEqual(state.submit_review(self.run_dir, "owned-spec", scope="integration")["scope"], "integration")
+        with self.assertRaisesRegex(ValueError, "owned spec"):
+            state.submit_review(self.run_dir, "user-issue", scope="integration")
+
     def test_save_keeps_file_mode(self):
         state.init(self.run_dir, "feature", "ABC-1")
         f = self.run_dir / ".kinetic" / "state.json"
