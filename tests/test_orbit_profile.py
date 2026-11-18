@@ -55,6 +55,19 @@ class OrbitProfileTest(unittest.TestCase):
         self.assertEqual(self.orbit("show", tid)["status"], "done")
         self.orbit("doctor")
 
+    def test_a_fourth_ticket_cannot_start_while_three_are_running(self):
+        self.orbit("setup", str(ROOT / "profiles" / "kinetic.toml"))
+        ids = [self.orbit("add", f"Ticket {n}")["id"] for n in range(4)]
+        for n, tid in enumerate(ids[:3]):
+            self.orbit("claim", tid, "--by", f"agent-{n}")
+        p = subprocess.run(["orbit", "--dir", str(self.anchor), "claim", ids[3], "--by", "agent-3", "--json"],
+                           cwd=self.anchor, env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(json.loads(p.stdout)["error"]["code"], "POLICY_VIOLATION")
+        self.orbit("submit", ids[0], "--by", "agent-0", "--command", "true", "--exit-code", "0")
+        self.orbit("claim", ids[3], "--by", "agent-3")  # a ticket in review no longer counts
+        self.assertEqual(self.orbit("show", ids[3])["status"], "running")
+
     def test_install_makes_named_profile_available_and_uninstall_removes_it(self):
         p = subprocess.run([sys.executable, "-m", "kinetic", "install", "--harness", "claude"],
                            cwd=ROOT, env=dict(self.env, PYTHONPATH=str(ROOT / "scripts")),

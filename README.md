@@ -418,7 +418,7 @@ The native Orbit workflow is shipped in `profiles/kinetic.toml`. `kinetic instal
 
 Orbit work stays `in_review` until both spec and standards review approve. `kinetic state submit-review` attaches passing verify evidence; `record-review` records independent verdicts and native fix attempts. Integration review targets the run's owned spec after full repo verifies.
 
-With `tracker: orbit`, a run's tickets live on an [Orbit](https://github.com/rcmendes/orbit) Board. The ticket store reads native Issue status, parent, assignee, lease and typed links; its `kinetic` Property holds only execution metadata. Other trackers keep the local ticket store.
+With `tracker: orbit`, a run's tickets live on an [Orbit](https://github.com/rcmendes/orbit) Board. The ticket store reads native Issue status, parent, assignee, lease and typed links; its `kinetic` Property holds only execution metadata. Other trackers keep the local ticket store. To add a native store for another tracker, see [docs/stores.md](docs/stores.md): the interface, the optional capabilities a store declares, and the contract suite it must pass.
 
 - **Hierarchy.** Each run owns a top-level `epic` spec, `task` slices beneath it, and `sub-task` tickets beneath each slice. Starting from a user Issue adds a nonblocking `relates-to` link from the owned spec; kinetic never claims, moves or closes that user Issue. Spec approval answers the owned spec's decision gate. The spec stays open until integration review approves it.
 - **Publication.** Tickets are staged in `<run_dir>/.kinetic/tickets.staged.json`, validated, then published in one batch at the breakdown gate. Source Keys make repeated publication safe. Each owned Issue carries `kinetic-run-<run-id>` for discovery.
