@@ -80,6 +80,8 @@ class HierarchyTest(unittest.TestCase):
             self.assertEqual((shown_slice['type'], shown_slice['parent']), ('task', spec))
             self.assertEqual((shown_ticket['type'], shown_ticket['parent']),
                              ('sub-task', ids['slice']))
+            state.record_gate(run, 'breakdown', True)
+            self.assertEqual(orbit_json(board, 'show', spec)['status'], 'running')
             state.human_done(run, ids['human'])
             self.assertEqual(orbit_json(board, 'show', ids['slice'])['status'], 'done')
-            self.assertEqual(orbit_json(board, 'show', spec)['status'], 'todo')
+            self.assertEqual(orbit_json(board, 'show', spec)['status'], 'running')

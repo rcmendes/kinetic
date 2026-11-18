@@ -44,3 +44,41 @@ self-approval, accepts an independent review, and runs Orbit doctor:
 ```sh
 PYTHONPATH=scripts python3 -m unittest tests.test_orbit_profile -v
 ```
+
+## Review through kinetic
+
+A successful implementer report is submitted while its Issue is still running:
+
+```sh
+kinetic state submit-review --run <run_dir> --id <ticket-id>
+kinetic state record-review --run <run_dir> --id <ticket-id> --axis spec --verdict approve
+kinetic state record-review --run <run_dir> --id <ticket-id> --axis standards --verdict approve
+```
+
+Both ticket review axes must approve before the Issue becomes `done`. Until
+then `in_review` occupies the repo and counts toward the parallel cap. Approval
+also closes a slice whose last ticket passed review. A report with concerns can
+then use `set-ticket --field status=done_with_concerns` before merging.
+
+A blocking finding uses `--verdict request-changes --reason "<finding>"`.
+Orbit restores the submitting implementer's identity, increments the profile's
+native `kinetic-reviewer-changes` attempt counter, and leaves the Issue running.
+After each fix, submit again with `--scope fix` and record `--axis fix`. Submit
+rounds are visible under `properties.orbit.review.rounds`; the fourth rejection
+after three fix attempts escalates to `needs_decision` for adjudication.
+
+`kinetic verify` records the executed command, exit code, timestamp and log in
+run state. Published tickets also retain the latest result in the
+`kinetic-verify` Property, including failures. Orbit reserves its `evidence`
+Property: successful submission appends native evidence there. Failed or stale
+verify cannot be submitted, and each new submit clears prior review axes.
+
+For the final integration review, run full verify without `--ticket` for each
+repo's integration worktree. Then submit the run's owned spec Issue with
+`--scope integration` and record `--axis integration`. Ticket verifies do not
+substitute for integration verifies. The spec closes only after the independent
+integration reviewer approves, and an input user Issue is never the target.
+
+Run `PYTHONPATH=scripts python3 -m unittest tests.test_orbit_review -v` to
+exercise native evidence, both ticket axes, fix attempts and integration review
+identities against a temporary Orbit Board.

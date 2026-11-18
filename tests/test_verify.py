@@ -41,6 +41,7 @@ class VerifyTest(unittest.TestCase):
             res = verify.run(self.run_dir, "T-1", "svc", self.repo, self.central)
             self.assertEqual(res["exit_code"], code)
             rec = state.load(self.run_dir)["verify"]["T-1"]
+            self.assertEqual(rec["command"], cmd)
             self.assertEqual(rec["exit_code"], code)
             self.assertEqual(rec["log_path"], res["log_path"])
 

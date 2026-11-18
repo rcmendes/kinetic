@@ -22,11 +22,12 @@ def run(run_dir, ticket_id, repo_name: str, repo_path, project_config: Path,
     started = datetime.now(timezone.utc)
     ts = started.strftime("%Y%m%dT%H%M%S%fZ")
     log_path = logs / f"verify-{ticket_id or repo_name}-{ts}.log"
+    command = (scope == "ticket" and cfg["verify_ticket"]) or cfg["verify"]
     with open(log_path, "wb") as log:
-        proc = subprocess.run((scope == "ticket" and cfg["verify_ticket"]) or cfg["verify"], shell=True, cwd=str(repo_path),
+        proc = subprocess.run(command, shell=True, cwd=str(repo_path),
                               stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
     state.record_verify(run_dir, ticket_id, proc.returncode, str(log_path), repo_name,
-                         at=started.isoformat(timespec="microseconds"))
+                         at=started.isoformat(timespec="microseconds"), command=command)
     return {"exit_code": proc.returncode, "log_path": str(log_path)}
 
 

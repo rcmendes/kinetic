@@ -17,7 +17,7 @@ from kinetic import ticket_store
 
 LANES = ("quick", "feature", "epic")
 STATUSES = ("todo", "running", "done", "done_with_concerns", "needs_decision",
-            "blocked", "merged", "released")
+            "blocked", "merged", "released", "in_review")
 
 
 PHASES = ("intake", "grill", "discover", "specify", "decompose", "build", "review", "ship", "retro", "done")
@@ -151,7 +151,7 @@ def set_ticket_store(run_dir, record: dict) -> dict:
         return st
 
 
-OCCUPIED = ("running", "needs_decision", "blocked")
+OCCUPIED = ("running", "needs_decision", "blocked", "in_review")
 
 
 def _verify_fresh(v, stamp) -> bool:
@@ -373,7 +373,7 @@ def remove_repo(run_dir, name: str) -> dict:
 
 
 def record_verify(run_dir, ticket_id, exit_code: int, log_path: str, repo_name=None,
-                  at: str | None = None) -> None:
+                  at: str | None = None, command: str | None = None) -> None:
     if ticket_id is None and not repo_name:
         raise ValueError("repo_name is required when ticket_id is None")
     key = ticket_id if ticket_id is not None else f"repo:{repo_name}"
@@ -383,7 +383,56 @@ def record_verify(run_dir, ticket_id, exit_code: int, log_path: str, repo_name=N
         repo = repo_name or s["tickets"].get(ticket_id, {}).get("repo")
         s["verify"][key] = {"exit_code": exit_code, "log_path": log_path, "at": stamp,
                             "repo": repo}
+        if command is not None:
+            s["verify"][key]["command"] = command
+        if ticket_id is not None:
+            ticket_store.for_state(s).record_verify(run_dir, s, _alias(s, ticket_id), s["verify"][key])
     _mutate(run_dir, fn)
+
+
+
+def submit_review(run_dir, ticket_id: str, scope: str = "ticket") -> dict:
+    if scope not in ("ticket", "fix", "integration"):
+        raise ValueError("review scope must be ticket, fix or integration")
+    with _locked(run_dir):
+        st = load(run_dir)
+        tid = _alias(st, ticket_id)
+        if scope == "integration":
+            if tid != st.get("spec"):
+                raise ValueError("integration review must target the run's owned spec")
+            if not st["repos"]:
+                raise ValueError("integration review requires registered repos")
+            evidence = []
+            for repo in st["repos"]:
+                latest = st["verify"].get(f"repo:{repo}")
+                if not latest or not _verify_fresh(latest, st["repos"][repo].get("last_edit_at") or ""):
+                    raise ValueError(f"integration review requires fresh passing verify for {repo}")
+                evidence.append(latest)
+        else:
+            if tid not in st["tickets"]:
+                raise ValueError(f"unknown ticket {ticket_id}")
+            refusal = done_refusal(st, tid)
+            if refusal:
+                raise ValueError(refusal)
+            evidence = [st["verify"][tid]]
+        ticket_store.for_state(st).submit_review(run_dir, st, tid, evidence, scope)
+        save(run_dir, st)
+        return {"id": tid, "scope": scope}
+
+
+def record_review(run_dir, ticket_id: str, axis: str, verdict: str, reason: str = "") -> dict:
+    if axis not in ("spec", "standards", "fix", "integration") or verdict not in ("approve", "request-changes"):
+        raise ValueError("invalid review axis or verdict")
+    if verdict == "request-changes" and not reason.strip():
+        raise ValueError("request-changes requires a reason")
+    with _locked(run_dir):
+        st = load(run_dir)
+        tid = _alias(st, ticket_id)
+        if (axis == "integration" and tid != st.get("spec")) or (axis != "integration" and tid not in st["tickets"]):
+            raise ValueError("review must target the run's owned spec or ticket")
+        ticket_store.for_state(st).record_review(run_dir, st, tid, axis, verdict, reason)
+        save(run_dir, st)
+        return {"id": tid, "axis": axis, "verdict": verdict}
 
 
 def record_edit(run_dir, path: str) -> None:
@@ -554,7 +603,13 @@ def main(argv=None) -> int:
     cmd("remove-repo", ("--name", {"required": True}))
     cmd("record-verify", ("--ticket", {"default": None}), ("--exit-code", {"type": int, "required": True}),
         ("--log-path", {"required": True}), ("--repo-name", {"default": None}),
-        ("--at", {"default": None}))
+        ("--at", {"default": None}), ("--command", {"default": None}))
+    cmd("submit-review", ("--id", {"required": True}),
+        ("--scope", {"choices": ("ticket", "fix", "integration"), "default": "ticket"}))
+    cmd("record-review", ("--id", {"required": True}),
+        ("--axis", {"choices": ("spec", "standards", "fix", "integration"), "required": True}),
+        ("--verdict", {"choices": ("approve", "request-changes"), "required": True}),
+        ("--reason", {"default": ""}))
     cmd("record-edit", ("--path", {"required": True}))
     cmd("record-gate", ("--gate", {"required": True}), ("--approved", {"type": _bool, "required": True}),
         ("--note", {"default": ""}))
@@ -590,8 +645,12 @@ def main(argv=None) -> int:
         elif a.cmd == "remove-repo":
             out = remove_repo(a.run, a.name)
         elif a.cmd == "record-verify":
-            record_verify(a.run, a.ticket, a.exit_code, a.log_path, a.repo_name, a.at)
+            record_verify(a.run, a.ticket, a.exit_code, a.log_path, a.repo_name, a.at, a.command)
             out = load(a.run)["verify"]
+        elif a.cmd == "submit-review":
+            out = submit_review(a.run, a.id, a.scope)
+        elif a.cmd == "record-review":
+            out = record_review(a.run, a.id, a.axis, a.verdict, a.reason)
         elif a.cmd == "record-edit":
             record_edit(a.run, a.path)
             out = {"last_edit_at": load(a.run)["last_edit_at"]}

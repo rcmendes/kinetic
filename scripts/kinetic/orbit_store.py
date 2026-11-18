@@ -367,6 +367,17 @@ class OrbitTicketStore:
             self._negotiated = True
         return self.config["anchor"]
 
+    def _resume_pending(self, st: dict) -> None:
+        from kinetic.state import internal
+        journal = internal(st["run_dir"]) / "orbit-write.json"
+        if journal.exists():
+            pending = json.loads(journal.read_text())
+            request = pending.get("request")
+            if request is None:
+                request = [{k: v for k, v in op.items() if k != "if_version"}
+                           for op in pending["operations"]]
+            self._batch(st, request)
+
     def _batch(self, st: dict, operations: list) -> dict:
         if not operations:
             return {"keys": {}, "results": []}
@@ -376,7 +387,8 @@ class OrbitTicketStore:
         digest = hashlib.sha256(json.dumps(operations, sort_keys=True).encode()).hexdigest()
         pending = json.loads(journal.read_text()) if journal.exists() else None
         if pending and pending["digest"] != digest:
-            raise OrbitStoreError("PENDING_WRITE", "an interrupted Orbit write must be retried first")
+            self._resume_pending(st)
+            return self._batch(st, operations)
         if not pending:
             cache = internal(st["run_dir"]) / "orbit-feed.json"
             snapshot = json.loads(cache.read_text()).get("issues", {}) if cache.exists() else {}
@@ -391,14 +403,19 @@ class OrbitTicketStore:
                     op["if_version"] = versions[tid]
                 guarded.append(op)
             pending = {"digest": digest, "key": "kinetic-" + uuid.uuid4().hex,
-                       "operations": guarded}
+                       "operations": guarded, "request": operations}
             atomic_write(journal, json.dumps(pending))
         for attempt in range(3):
             try:
                 result = call(anchor, ["batch", "--file", "-", "--idempotency-key", pending["key"]],
                               stdin=json.dumps({"operations": pending["operations"]}))
             except OrbitStoreError as error:
-                if error.code != "VERSION_CONFLICT" or attempt == 2:
+                if error.code != "VERSION_CONFLICT":
+                    if error.code not in ("LOCKED", "BAD_OUTPUT", "ORBIT_FAILED"):
+                        journal.unlink(missing_ok=True)
+                    raise
+                if attempt == 2:
+                    journal.unlink(missing_ok=True)
                     raise
                 # A rejected batch made no changes. Refresh guards before retrying;
                 # property writes remain scoped to kinetic's namespace.
@@ -414,6 +431,7 @@ class OrbitTicketStore:
 
     def _issues(self, st: dict) -> list:
         """Resume a durable feed snapshot; capture the cursor before the full read."""
+        self._resume_pending(st)
         from kinetic.state import atomic_write, internal
         cache = internal(st["run_dir"]) / "orbit-feed.json"
         anchor = self._anchor(st)
@@ -634,6 +652,7 @@ class OrbitTicketStore:
 
     def spec_ops(self, run_dir, st: dict, title: str, body: str) -> list:
         """Publish an owned epic, linking any user Issue without mutating it."""
+        self._resume_pending(st)
         run_id, names = st["run_id"], self._names(st)
         key = source_key(run_id, "spec")
         existing = self._spec_id(st)
@@ -670,6 +689,7 @@ class OrbitTicketStore:
         return {"ref": ref, "published": True}
 
     def sync_spec(self, run_dir, st: dict, event: str) -> None:
+        self._resume_pending(st)
         spec_id = self._spec_id(st)
         if not spec_id:
             return
@@ -683,13 +703,15 @@ class OrbitTicketStore:
             ops.append({"op": "transition", "id": spec_id, "name": "answer", "by": holder(st["run_id"])})
             current = "todo"
         if event == "building" and current == "todo":
-            ops.append({"op": "claim", "id": spec_id, "by": holder(st["run_id"])})
+            ops.append({"op": "transition", "id": spec_id, "name": "claim",
+                        "by": holder(st["run_id"])})
         ops.append({"op": "property", "id": spec_id, "owner": ANNOTATION_OWNER,
                     "value": {"role": "spec", "run": st["run_id"], "phase": phase}})
         self._batch(st, ops)
 
     def publish(self, run_dir, st: dict) -> dict:
         """Send every staged ticket (and new slices) in one Batch; returns provisional -> Task ID."""
+        self._resume_pending(st)
         staged = self._staged(run_dir)
         if not staged:
             return {}
@@ -715,7 +737,72 @@ class OrbitTicketStore:
             (Path(run_dir) / "issues" / f"{pid}.md").unlink(missing_ok=True)
         return mapping
 
+    def record_verify(self, run_dir, st: dict, ticket_id: str, evidence: dict) -> None:
+        self._resume_pending(st)
+        if ticket_id in self._staged(run_dir):
+            return
+        # Orbit reserves evidence for submit; keep failed and pre-submit verify here.
+        self._batch(st, [{"op": "property", "id": ticket_id, "owner": "kinetic-verify", "value": evidence}])
+
+    def submit_review(self, run_dir, st: dict, ticket_id: str, evidence: list,
+                      scope: str = "ticket") -> None:
+        self._resume_pending(st)
+        if scope not in ("ticket", "fix", "integration"):
+            raise ValueError("review scope must be ticket, fix or integration")
+        if not evidence or any(e.get("exit_code") != 0 for e in evidence):
+            raise ValueError("review requires a passing verify for every reviewed repo")
+        issue = call(self._anchor(st), ["show", ticket_id])
+        if issue["status"] == "in_review":
+            return
+        if issue["status"] != "running":
+            raise ValueError("submit review requires running work")
+        role = "orchestrator" if scope == "integration" else "implementer"
+        by = holder(st["run_id"], None if scope == "integration" else ticket_id, role)
+        self._batch(st, [
+            {"op": "submit", "id": ticket_id, "by": by,
+             "command": [e["command"] for e in evidence if e.get("command")],
+             "exit_code": 0, "file": [e["log_path"] for e in evidence]},
+            {"op": "property", "id": ticket_id, "owner": "kinetic-reviews",
+             "value": {"scope": scope, "verdicts": {}}},
+        ])
+
+    def record_review(self, run_dir, st: dict, ticket_id: str, axis: str,
+                      verdict: str, reason: str = "") -> None:
+        self._resume_pending(st)
+        if axis not in ("spec", "standards", "fix", "integration"):
+            raise ValueError("review axis must be spec, standards, fix or integration")
+        if verdict not in ("approve", "request-changes"):
+            raise ValueError("review verdict must be approve or request-changes")
+        if verdict == "request-changes" and not reason.strip():
+            raise ValueError("request-changes requires a reason")
+        issue = call(self._anchor(st), ["show", ticket_id])
+        record = dict((issue.get("properties") or {}).get("kinetic-reviews") or {})
+        verdicts = dict(record.get("verdicts") or {})
+        if verdicts.get(axis) == {"verdict": verdict, "reason": reason}:
+            return
+        if issue["status"] != "in_review":
+            raise ValueError("record review requires submitted work")
+        expected_axes = {"ticket": ("spec", "standards"), "fix": ("fix",), "integration": ("integration",)}
+        if axis not in expected_axes.get(record.get("scope"), ()):
+            raise ValueError("review axis does not match the submitted scope")
+        verdicts[axis] = {"verdict": verdict, "reason": reason}
+        record["verdicts"] = verdicts
+        operations = [{"op": "property", "id": ticket_id, "owner": "kinetic-reviews", "value": record}]
+        approved = (axis in ("fix", "integration") or
+                    all(verdicts.get(a, {}).get("verdict") == "approve" for a in ("spec", "standards")))
+        if verdict == "request-changes" or approved:
+            operations.append({"op": "review", "id": ticket_id, "verdict": verdict,
+                               "reason": reason or None,
+                               "by": holder(st["run_id"], None if axis == "integration" else ticket_id,
+                                            axis + "-reviewer")})
+            if verdict == "approve" and axis != "integration":
+                before = st.get("tickets", {})
+                after = {**before, ticket_id: {**before.get(ticket_id, {}), "status": "done"}}
+                operations.extend(self._close_slices(st, self._staged(run_dir), before, after))
+        self._batch(st, operations)
+
     def touch(self, run_dir, st: dict, ticket_id: str) -> None:
+        self._resume_pending(st)
         anchor = self._anchor(st)
         issue = call(anchor, ["show", ticket_id])
         who = holder(st["run_id"], ticket_id, "implementer")

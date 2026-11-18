@@ -31,6 +31,11 @@ def edge(i, typ):
 
 
 class FrontierTest(unittest.TestCase):
+    def test_review_keeps_repo_occupied_and_counts_toward_parallel_cap(self):
+        st = S({"A": t("r1", "in_review"), "B": t("r1"), "C": t("r2")})
+        self.assertEqual(frontier.ready(st), ["C"])
+        self.assertEqual(frontier.ready(st, cap=1), [])
+
     def test_no_blockers_ready(self):
         self.assertEqual(frontier.ready(S({"A": t("r1")})), ["A"])
 

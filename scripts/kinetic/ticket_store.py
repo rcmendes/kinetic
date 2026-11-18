@@ -39,6 +39,17 @@ class TicketStore(Protocol):
         """Mirror a spec lifecycle event on the store: "gate-approved",
         "gate-rejected" or "building" (breakdown approved)."""
 
+    def record_verify(self, run_dir, st: dict, ticket_id: str, evidence: dict) -> None:
+        """Persist verify evidence without marking the ticket complete."""
+
+    def submit_review(self, run_dir, st: dict, ticket_id: str, evidence: list,
+                      scope: str = "ticket") -> None:
+        """Submit verified work for ticket, fix or integration review."""
+
+    def record_review(self, run_dir, st: dict, ticket_id: str, axis: str,
+                      verdict: str, reason: str = "") -> None:
+        """Record an independent review and apply its native verdict."""
+
     def touch(self, run_dir, st: dict, ticket_id: str) -> None:
         """Signal that a running ticket's implementer is alive."""
 
@@ -66,6 +77,17 @@ class LocalTicketStore:
         return {"ref": "spec.md", "published": False}
 
     def sync_spec(self, run_dir, st: dict, event: str) -> None:
+        return None
+
+    def record_verify(self, run_dir, st: dict, ticket_id: str, evidence: dict) -> None:
+        return None
+
+    def submit_review(self, run_dir, st: dict, ticket_id: str, evidence: list,
+                      scope: str = "ticket") -> None:
+        return None
+
+    def record_review(self, run_dir, st: dict, ticket_id: str, axis: str,
+                      verdict: str, reason: str = "") -> None:
         return None
 
     def touch(self, run_dir, st: dict, ticket_id: str) -> None:
