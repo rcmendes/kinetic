@@ -196,6 +196,22 @@ class StoreContract:
             self.skipTest("store gives no native view of priority")
         self.assertLess(first, waits)  # a blocks b, so a ranks higher
 
+    def test_a_question_parks_the_ticket_and_an_answer_returns_it(self):
+        self.need("human-question")
+        state.set_ticket(self.run_dir, self.a, status="running")
+        state.ask_question(self.run_dir, self.a, "Which seam?")
+        self.assertEqual(self.tickets()[self.a]["status"], "needs_decision")
+        open_ = self.store().open_questions(self.run_dir, state.load(self.run_dir))
+        self.assertEqual([(q["id"], q["question"]) for q in open_], [(self.a, "Which seam?")])
+        state.answer_question(self.run_dir, self.a, "Seam A")
+        self.assertEqual(self.tickets()[self.a]["status"], "running")
+        self.assertEqual(self.store().open_questions(self.run_dir, state.load(self.run_dir)), [])
+
+    def test_answering_without_an_open_question_is_refused(self):
+        self.need("human-question")
+        with self.assertRaises(ValueError):
+            state.answer_question(self.run_dir, self.a, "nothing was asked")
+
     def test_review_states_complete_a_verified_ticket(self):
         self.need("review-states")
         state.set_ticket(self.run_dir, self.a, status="running")
