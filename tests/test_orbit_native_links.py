@@ -85,13 +85,34 @@ class NativeLinksTest(unittest.TestCase):
             tid = state.publish_tickets(run)["a"]
             shown = orbit_json(board, "show", tid)
             self.assertEqual(shown["properties"]["touches"],
-                             {"paths": ["src/auth", "tests/test_auth.py"]})
+                             {"paths": ["api/src/auth", "api/tests/test_auth.py"]})
             self.assertNotIn("touches", shown["properties"]["kinetic"])
             self.assertEqual(state.load(run)["tickets"][tid]["touches"],
                              ["src/auth", "tests/test_auth.py"])
             state.set_ticket(run, tid, touches=["src/session.py"])
             self.assertEqual(orbit_json(board, "show", tid)["properties"]["touches"],
-                             {"paths": ["src/session.py"]})
+                             {"paths": ["api/src/session.py"]})
             self.assertEqual(state.load(run)["tickets"][tid]["touches"], ["src/session.py"])
             state.set_ticket(run, tid, touches=[])
             self.assertEqual(orbit_json(board, "show", tid)["properties"]["touches"], {"paths": []})
+
+
+class TouchPathScopeTest(unittest.TestCase):
+    """Orbit compares touches across the whole Board, so each path carries its repo."""
+
+    def paths(self, repo, touches):
+        ops = orbit_store.ops_for("t", None, {"repo": repo, "touches": touches, "status": "todo"},
+                                  "run", {"run": "kinetic-run-<run id>", "kind": {"human": ""}})
+        return next(op["value"]["paths"] for op in ops if op.get("owner") == "touches")
+
+    def test_the_same_path_in_two_repos_does_not_collide(self):
+        self.assertNotEqual(self.paths("api", ["src/auth.py"]), self.paths("web", ["src/auth.py"]))
+
+    def test_leading_dot_slash_goes_and_dot_directories_stay(self):
+        self.assertEqual(self.paths("api", ["./src/a.py", ".github/ci.yml", "/lib"]),
+                         ["api/src/a.py", "api/.github/ci.yml", "api/lib"])
+
+    def test_reading_strips_only_the_tickets_own_repo(self):
+        task = {"properties": {"kinetic": {"repo": "api", "kind": "agent"},
+                               "touches": {"paths": ["api/src/a.py", "web/b.py"]}}}
+        self.assertEqual(orbit_store.to_ticket(task)["touches"], ["src/a.py", "web/b.py"])
