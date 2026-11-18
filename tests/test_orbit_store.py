@@ -524,6 +524,45 @@ class OrbitPublishTest(unittest.TestCase):
         ticket_store.for_state(st).touch(self.run_dir, st, a)
         self.assertGreater(orbit_json(self.board, "show", a)["lease_until"], first)
 
+    def test_staged_running_ticket_publishes_with_resolved_identity(self):
+        state.set_ticket(self.run_dir, "01-api-a", status="running")
+        a = state.publish_tickets(self.run_dir)["01-api-a"]
+        shown = orbit_json(self.board, "show", a)
+        run_id = state.load(self.run_dir)["run_id"]
+        self.assertEqual(shown["status"], "running")
+        self.assertEqual(shown["assignee"], orbit_store.holder(run_id, a, "implementer"))
+
+    def test_new_running_ticket_after_publish_uses_resolved_identity(self):
+        state.publish_tickets(self.run_dir)
+        state.set_ticket(self.run_dir, "03-api-new", repo="api", status="running")
+        loaded = state.load(self.run_dir)
+        tid = loaded["ticket_aliases"]["03-api-new"]
+        self.assertEqual(orbit_json(self.board, "show", tid)["assignee"],
+                         orbit_store.holder(loaded["run_id"], tid, "implementer"))
+        self.assertEqual(loaded["tickets"][tid]["status"], "running")
+
+    def test_running_publication_recovers_after_committed_status_reply_is_lost(self):
+        state.set_ticket(self.run_dir, "01-api-a", status="running")
+        call = orbit_store.call
+        batches = 0
+
+        def lose_second_reply(anchor, args, stdin=None):
+            nonlocal batches
+            result = call(anchor, args, stdin)
+            if args[0] == "batch":
+                batches += 1
+                if batches == 2:
+                    raise OSError("reply lost after status commit")
+            return result
+
+        with mock.patch.object(orbit_store, "call", side_effect=lose_second_reply):
+            with self.assertRaisesRegex(OSError, "reply lost"):
+                state.publish_tickets(self.run_dir)
+        ids = state.publish_tickets(self.run_dir)
+        self.assertEqual(orbit_json(self.board, "show", ids["01-api-a"])["status"], "running")
+        self.assertEqual(orbit_json(self.board, "list", "--include-closed")["count"], 3)
+        self.assertFalse((self.run_dir / ".kinetic" / "tickets.staged.json").exists())
+
     def test_resuming_paused_ticket_renews_its_lease(self):
         import time
         a = state.publish_tickets(self.run_dir)["01-api-a"]

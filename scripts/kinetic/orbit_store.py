@@ -547,12 +547,18 @@ class OrbitTicketStore:
                     staged_changed = True
             else:
                 changes += ops_for(tid, before[tid], t, run_id, names)
-        ref = self._ref(run_id, set(new), aliases)
+        if published and (new or staged):
+            self._save_staged(run_dir, {**staged, **new})
+            mapping = self.publish(run_dir, st)
+            aliases = {**aliases, **mapping}
+            st["ticket_aliases"] = aliases
+            staged, staged_changed = {}, False
+        ref = self._ref(run_id, set(), aliases)
         for op in changes:
             if op["op"] in ("link", "unlink") and "to" in op:
                 op["to"] = ref(op["to"])
-        operations = (self._add_ops(run_dir, st, new, [], aliases)[0] + changes
-                      + self._close_slices(st, staged, before, after))
+        rewritten = {aliases.get(tid, tid): _rewrite(t, aliases) for tid, t in after.items()}
+        operations = changes + self._close_slices(st, staged, before, rewritten)
         self._batch(st, operations)
         if staged_changed:
             self._save_staged(run_dir, staged)
@@ -600,7 +606,8 @@ class OrbitTicketStore:
                 add["parent"] = ref(t["slice"])
             ops.append(add)
         for pid in order:
-            for op in ops_for(ref(pid), None, tickets[pid], run_id, names):
+            initial = dict(tickets[pid], status="todo")
+            for op in ops_for(ref(pid), None, initial, run_id, names):
                 if op["op"] == "label":
                     continue  # identifying labels were set by add
                 if op["op"] in ("link", "unlink") and "to" in op:
@@ -693,6 +700,13 @@ class OrbitTicketStore:
                                    st.get("ticket_aliases") or {})
         keys = self._batch(st, ops).get("keys", {})
         mapping = {pid: keys[source_key(run_id, pid)] for pid in [*new_slices, *order]}
+        transitions = []
+        for pid in order:
+            if staged[pid].get("status", "todo") != "todo":
+                tid = mapping[pid]
+                current = to_ticket(call(self._anchor(st), ["show", tid]))
+                transitions += ops_for(tid, current, _rewrite(staged[pid], mapping), run_id, self._names(st))
+        self._batch(st, transitions)
         self.config["published"] = True
         self.config["published_slices"] = sorted(done_slices | {mapping[s] for s in new_slices})
         # The Board now holds them; a save lost after this point heals on the next read.
