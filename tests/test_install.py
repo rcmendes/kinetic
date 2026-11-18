@@ -76,6 +76,43 @@ class InstallCase(unittest.TestCase):
         return json.loads(self.manifest_path.read_text())
 
 
+class StoreInstallTest(InstallCase):
+    def install_with_tools(self, *tools):
+        bindir = self.tmp / "tools"
+        bindir.mkdir(exist_ok=True)
+        for entry in bindir.iterdir():
+            entry.unlink()
+        for name in ("git", *tools):
+            target = shutil.which(name) or sys.executable
+            (bindir / name).symlink_to(target)
+        return subprocess.run([sys.executable, "-m", "kinetic", "install", "--harness", "claude"],
+                              env=dict(self.env, PATH=str(bindir)), capture_output=True, text=True)
+
+    def test_install_without_optional_tracker_writes_no_tracker_profile(self):
+        result = self.install_with_tools()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.home / ".config" / "orbit").exists())
+        self.assertNotIn("orbit", result.stdout.lower())
+
+    def test_install_with_optional_tracker_records_profile_for_uninstall(self):
+        result = self.install_with_tools("orbit")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        profile = self.home / ".config" / "orbit" / "profiles" / "kinetic.toml"
+        self.assertEqual(profile.read_text(), (self.clone / "profiles" / "kinetic.toml").read_text())
+        self.assertEqual(self._manifest()["files"][str(profile)]["type"], "file")
+        self.assertNotIn("orbit setup", result.stdout.lower())
+        self.assertEqual(self._uninstall().returncode, 0)
+        self.assertFalse(profile.exists())
+
+    def test_reinstall_without_tracker_keeps_previous_profile_owned_for_uninstall(self):
+        self.assertEqual(self.install_with_tools("orbit").returncode, 0)
+        profile = self.home / ".config" / "orbit" / "profiles" / "kinetic.toml"
+        self.assertEqual(self.install_with_tools().returncode, 0)
+        self.assertIn(str(profile), self._manifest()["files"])
+        self.assertEqual(self._uninstall().returncode, 0)
+        self.assertFalse(profile.exists())
+
+
 class InstallClaudeTest(InstallCase):
     def test_install_writes_link_settings_and_manifest(self):
         cfgdir = self.home / ".config" / "kinetic"

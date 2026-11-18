@@ -156,3 +156,16 @@ def for_tracker(tracker: str) -> dict:
     if tracker and tracker != "local" and importlib.util.find_spec(_module(tracker)) is not None:
         return {"kind": tracker, "config": {}}
     return dict(LOCAL)
+
+
+def installation_files(clone: Path, home: Path) -> dict:
+    """Optional files supplied by packaged ticket stores for the shared installer."""
+    files = {}
+    for path in sorted(Path(__file__).parent.glob("*_store.py")):
+        if path.stem == "ticket_store":
+            continue
+        module = importlib.import_module(f"kinetic.{path.stem}")
+        provider = getattr(module, "installation_files", None)
+        if provider:
+            files.update(provider(clone, home))
+    return files
