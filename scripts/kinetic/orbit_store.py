@@ -1,10 +1,8 @@
-"""Orbit ticket store: a run's tickets are Tasks on an Orbit Board.
+"""Orbit ticket store: native Issues, workflow states, hierarchy and typed links.
 
-The only module in kinetic that knows Orbit. Tickets are SubTasks of their
-slice's Parent Task; every kinetic field lives in the Task's `kinetic`
-Annotation, which is authoritative, and the Orbit status, claim, waiting
-reason and labels are derived from it and written in the same `orbit batch`.
-Tickets not yet published are staged in <run_dir>/.kinetic/tickets.staged.json.
+Kinetic-only metadata lives in the kinetic Property. Published tickets use
+Orbit as their source of truth; unpublished tickets are staged in
+<run_dir>/.kinetic/tickets.staged.json.
 """
 from __future__ import annotations
 
