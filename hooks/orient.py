@@ -13,6 +13,11 @@ def _one(s) -> str:
 
 
 def _emit(text: str) -> None:
+    try:  # name skills the way this harness invokes them (/kinetic:run, $kntc-run, kntc-run)
+        from kinetic import harness
+        text = harness.localize(text, _common._HARNESS)
+    except Exception:
+        pass
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
                                               "additionalContext": text}}))
 

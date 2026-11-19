@@ -248,5 +248,27 @@ class CliTest(unittest.TestCase):
         self.assertIn("emacs", err)
 
 
+class SkillCommandTest(unittest.TestCase):
+    """A session is told to run a skill the way its own harness spells it."""
+
+    def test_each_harness_spells_a_skill_its_own_way(self):
+        self.assertEqual(harness.skill_command("claude", "run"), "/kinetic:run")
+        self.assertEqual(harness.skill_command("devin", "run"), "/kinetic:run")
+        self.assertEqual(harness.skill_command("codex", "run"), "$kntc-run")
+        self.assertEqual(harness.skill_command("opencode", "run"), "kntc-run")
+
+    def test_text_naming_skills_is_rewritten_for_the_harness(self):
+        text = "next: /kinetic:run <ref> (or /kinetic:start); see /kinetic:status"
+        self.assertEqual(harness.localize(text, "codex"), "next: $kntc-run <ref> (or $kntc-start); see $kntc-status")
+        self.assertEqual(harness.localize(text, "opencode"), "next: kntc-run <ref> (or kntc-start); see kntc-status")
+        self.assertEqual(harness.localize(text, "claude"), text)
+
+    def test_an_unknown_harness_leaves_the_text_alone(self):
+        self.assertEqual(harness.localize("/kinetic:run", "bogus"), "/kinetic:run")
+
+    def test_text_without_skills_is_unchanged(self):
+        self.assertEqual(harness.localize("phase: build", "codex"), "phase: build")
+
+
 if __name__ == "__main__":
     unittest.main()
