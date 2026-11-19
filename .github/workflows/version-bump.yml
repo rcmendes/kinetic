@@ -2,6 +2,18 @@ name: version-bump
 on:
   pull_request:
     branches: [main]
+    # Only changes that reach users need a new version; docs, tests and the repo's own
+    # files do not ship in the plugin.
+    paths:
+      - ".claude-plugin/**"
+      - "agents/**"
+      - "bin/**"
+      - "hooks/**"
+      - "profiles/**"
+      - "scripts/**"
+      - "skills/**"
+      - "templates/**"
+      - "trackers/**"
 
 jobs:
   check:
