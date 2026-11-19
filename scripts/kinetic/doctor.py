@@ -60,11 +60,15 @@ def _resolve_harness(harness_id, settings: Path):
         return harness.DEFAULT_HARNESS, harness.profile(harness.DEFAULT_HARNESS), str(e)
 
 
-def _harness_check(cfg: dict, hid: str, settings: Path) -> dict:
-    """settings.json records the harness and clone the installer wrote."""
+def _harness_check(cfg: dict, hid: str, settings: Path, installed: bool = False) -> dict:
+    """settings.json records the harness and clone the installer wrote. `installed` says the
+    harness has its own install manifest: settings then records only the default, and a
+    different default is not a problem."""
     recorded = cfg.get("harness")
     clone = cfg.get("clone")
     install = f"kinetic install --harness {hid}"
+    if recorded and recorded != hid and installed:
+        return _r("harness", "pass")
     if recorded and recorded != hid:
         return _r("harness", "warn",
                   f"settings records harness '{recorded}', not '{hid}'; "
@@ -625,7 +629,7 @@ def checks(repos: list[tuple[str, str]], home: Path | None = None,
             cfg = config._load(settings)
         except config.ConfigError:
             cfg = {}
-        out.append(_harness_check(cfg, hid, settings))
+        out.append(_harness_check(cfg, hid, settings, _manifest_path(home, hid).is_file()))
         out.extend(_install_checks(home, hid, settings, cfg))
 
     for name, path in repos if project_config else []:
@@ -705,11 +709,38 @@ def _observability(settings: Path, home: Path, harness_id) -> dict:
     return out
 
 
+def installed_harnesses(home: Path, settings: Path) -> list[str]:
+    """Harness ids with an install manifest; the default harness alone when none exists."""
+    found = [h for h in harness.HARNESS_IDS if _manifest_path(home, h).is_file()]
+    if found:
+        return found
+    try:
+        return [harness.active_harness(settings=settings)]
+    except harness.HarnessError:
+        return [harness.DEFAULT_HARNESS]
+
+
+def _main_all(repos, home: Path, settings: Path, project_config) -> int:
+    results = {}
+    for hid in installed_harnesses(home, settings):
+        res = checks(repos, home=home, settings=settings, harness_id=hid,
+                     project_config=project_config)
+        one = {"harness": hid, "checks": res, "ok": all(c["status"] != "fail" for c in res)}
+        one.update(_observability(settings, home, hid))
+        results[hid] = one
+    ok = all(one["ok"] for one in results.values())
+    print(json.dumps({"harnesses": results, "ok": ok}))
+    return 0 if ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="kinetic.doctor")
     ap.add_argument("--repo", action="append", default=[], metavar="NAME=PATH")
-    ap.add_argument("--harness", choices=harness.HARNESS_IDS, default=None,
-                    help="harness id; default: settings.json 'harness' or claude")
+    which = ap.add_mutually_exclusive_group()
+    which.add_argument("--harness", choices=harness.HARNESS_IDS, default=None,
+                       help="harness id; default: settings.json 'harness' or claude")
+    which.add_argument("--all", action="store_true",
+                       help="check every harness that has an install manifest")
     args = ap.parse_args(argv)
     repos = []
     for spec in args.repo:
@@ -727,8 +758,11 @@ def main(argv: list[str] | None = None) -> int:
                      if isinstance(e, dict) and e.get("path")]
         except config.ConfigError:
             pass  # the project-config check reports it
+    project_config = found / ".kinetic" / "config.json" if found else None
+    if args.all:
+        return _main_all(repos, home, settings, project_config)
     res = checks(repos, home=home, settings=settings, harness_id=args.harness,
-                 project_config=found / ".kinetic" / "config.json" if found else None)
+                 project_config=project_config)
     ok = all(c["status"] != "fail" for c in res)
     payload = {"checks": res, "ok": ok}
     payload.update(_observability(settings, home, args.harness))
