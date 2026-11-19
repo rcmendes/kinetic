@@ -158,6 +158,8 @@ Failing checks print the fix. Then continue with the [quick start](#quick-start)
 
 ### 7. Update
 
+`kinetic doctor` also compares versions. `version-skew` warns when the plugin a harness loaded and the checkout the `kinetic` command runs from are on different versions (it needs the Claude Code plugin record, so other harnesses show no row). `update-available` warns when a newer release exists on GitHub; it asks `gh` at most once a day, caches the answer in `~/.config/kinetic/update-check.json`, and adds no row when offline or when `gh` fails. Set `"update_check": false` in `~/.config/kinetic/settings.json` to stop the lookup; `version-skew` stays because it reads only local files.
+
 - **Marketplace install (Claude Code):** `claude plugin marketplace update kinetic`, then `claude plugin update kinetic@kinetic`, then `kinetic install --harness claude` again so the generated files match. Claude Code keeps each installed version in its own folder (`~/.claude/plugins/cache/kinetic/kinetic/<version>`), so every release bumps the version in `.claude-plugin/plugin.json`; a change merged without a bump may not reach marketplace users.
 - **Checkout install:** `git pull`, then re-run `kinetic install --harness <h>` for each harness you use.
 - Check with `kinetic doctor`: it reports a stale install. Releases are described in [docs/RELEASING.md](docs/RELEASING.md).
