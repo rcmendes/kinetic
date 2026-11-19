@@ -1111,6 +1111,37 @@ class RecordEditAndOrient(HookCase):
             out = self.hook("orient", payload)
             self.assertEqual(out["hookSpecificOutput"]["additionalContext"], "kinetic harness: claude")
 
+    def _update_available(self, latest="0.8.0", checked_at=None):
+        """A checkout at 0.7.0 whose origin is on GitHub, with `latest` already cached."""
+        import time
+        clone = self.home / "kinetic-clone"
+        (clone / ".claude-plugin").mkdir(parents=True)
+        (clone / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "0.7.0"}))
+        subprocess.run(["git", "init", "-q", str(clone)], check=True)
+        subprocess.run(["git", "-C", str(clone), "remote", "add", "origin", "git@github.com:acme/kinetic.git"],
+                       check=True)
+        cfgdir = self.home / ".config" / "kinetic"
+        cfgdir.mkdir(parents=True, exist_ok=True)
+        (cfgdir / "settings.json").write_text(json.dumps({"harness": "claude", "clone": str(clone)}))
+        (cfgdir / "update-check.json").write_text(json.dumps(
+            {"repo": "acme/kinetic", "checked_at": checked_at or time.time(), "latest": latest}))
+
+    def test_orient_says_once_a_day_that_an_update_exists(self):
+        self._update_available()
+        first = self.hook("orient", {})["hookSpecificOutput"]["additionalContext"].splitlines()
+        self.assertEqual(first[0], "kinetic harness: claude")
+        self.assertEqual(first[1], "kinetic 0.8.0 is available (you have 0.7.0): run /kinetic:update")
+        again = self.hook("orient", {})["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("is available", again)
+
+    def test_orient_stays_quiet_when_update_checks_are_off(self):
+        self._update_available()
+        cfg = self.home / ".config" / "kinetic" / "settings.json"
+        data = json.loads(cfg.read_text())
+        cfg.write_text(json.dumps({**data, "update_check": False}))
+        text = self.hook("orient", {})["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("is available", text)
+
     def test_orient_names_open_runs_at_root_without_binding(self):
         self.activate()
         text = self.hook("orient", {"cwd": str(self.proj), "session_id": "s1"})[

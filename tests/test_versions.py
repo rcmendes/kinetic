@@ -92,5 +92,73 @@ class VersionTest(unittest.TestCase):
         self.assertIsNone(versions.latest_release("acme/k", self.tmp / "c.json", 1.0, boom))
 
 
+class NoticeTest(unittest.TestCase):
+    """The once-a-day line at session start: local files only, a refresh runs in the background."""
+
+    DAY = 24 * 3600
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = Path(tmp.name) / "home"
+        (self.home / ".config" / "kinetic").mkdir(parents=True)
+        self.clone = Path(tmp.name) / "clone"
+        (self.clone / ".claude-plugin").mkdir(parents=True)
+        (self.clone / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "0.7.0"}))
+        self.cfg = {"harness": "claude", "clone": str(self.clone)}
+        self.spawned = []
+        self.git = lambda args: "git@github.com:acme/kinetic.git\n"
+
+    def cache(self, latest, checked_at):
+        (self.home / ".config" / "kinetic" / "update-check.json").write_text(
+            json.dumps({"repo": "acme/kinetic", "checked_at": checked_at, "latest": latest}))
+
+    def notice(self, now, harness="claude", cfg=None):
+        return versions.notice(self.home, cfg or self.cfg, harness, now,
+                               spawn=lambda repo, cache: self.spawned.append(repo), git=self.git)
+
+    def test_a_newer_cached_release_makes_one_line(self):
+        self.cache("0.8.0", 1000.0)
+        line = self.notice(1000.0)
+        self.assertEqual(line, "kinetic 0.8.0 is available (you have 0.7.0): run /kinetic:update")
+
+    def test_it_is_shown_at_most_once_a_day(self):
+        self.cache("0.8.0", 1000.0)
+        self.assertIsNotNone(self.notice(1000.0))
+        self.assertIsNone(self.notice(1000.0 + 3600))
+        self.assertIsNotNone(self.notice(1000.0 + self.DAY + 1))
+
+    def test_the_command_is_spelled_for_the_harness(self):
+        self.cache("0.8.0", 1000.0)
+        self.assertTrue(self.notice(1000.0, "codex").endswith("$kntc-update"))
+
+    def test_nothing_is_said_when_up_to_date_or_without_a_clone_or_when_off(self):
+        self.cache("0.7.0", 1000.0)
+        self.assertIsNone(self.notice(1000.0))
+        self.cache("0.8.0", 1000.0)
+        self.assertIsNone(self.notice(1000.0, cfg={"harness": "claude"}))
+        self.assertIsNone(self.notice(1000.0, cfg={**self.cfg, "update_check": False}))
+        self.assertEqual(self.spawned, [])
+
+    def test_a_stale_or_missing_cache_starts_a_background_refresh_but_blocks_nothing(self):
+        self.assertIsNone(self.notice(1000.0))
+        self.assertEqual(self.spawned, ["acme/kinetic"])
+        self.cache("0.8.0", 1000.0)
+        self.assertIsNotNone(self.notice(1000.0 + 2 * self.DAY))
+        self.assertEqual(len(self.spawned), 2)
+
+    def test_a_refresh_is_not_started_again_within_six_hours(self):
+        self.notice(1000.0)
+        self.notice(1000.0 + 3600)
+        self.assertEqual(len(self.spawned), 1)
+        self.notice(1000.0 + 7 * 3600)
+        self.assertEqual(len(self.spawned), 2)
+
+    def test_a_broken_state_file_never_raises(self):
+        (self.home / ".config" / "kinetic" / "update-notice.json").write_text("{nope")
+        self.cache("0.8.0", 1000.0)
+        self.assertIsNotNone(self.notice(1000.0))
+
+
 if __name__ == "__main__":
     unittest.main()
