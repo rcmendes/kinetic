@@ -18,6 +18,9 @@ def _emit(text: str) -> None:
 
 
 def main(inp):
+    # Always name the harness first: skills pass this id to `kinetic harness`, so a session
+    # outside a project, or with no run, still gets its own harness's profile.
+    head = f"kinetic harness: {_common._HARNESS}"
     try:  # marks also expire here, not only when another mark is written
         proj = _common.project.find(inp.get("cwd") or None) if _common.project else None
     except Exception:
@@ -27,22 +30,25 @@ def main(inp):
     run_dir = _common.run_dir_for(inp)
     if run_dir is None:
         if _common.project is None:
+            _emit(head)
             return
         proj = _common.project.find(inp.get("cwd") or None)
         if proj is None:
-            _emit(NO_PROJECT)
+            _emit(f"{head}\n{NO_PROJECT}")
         else:
             runs = _common.project.open_runs(proj)
             if runs:  # never pick one for the session; name them
-                _emit(_one("kinetic: open runs here: " + ", ".join(r["run_id"] for r in runs)
-                           + ". Resume one with /kinetic:run."))
+                _emit(f"{head}\n" + _one("kinetic: open runs here: " + ", ".join(r["run_id"] for r in runs)
+                                          + ". Resume one with /kinetic:run."))
+            else:
+                _emit(head)
         return
     from kinetic import next_step
     st = _common.state.load(run_dir)
     s = next_step.suggest(st)
-    _emit("\n".join(_one(x) for x in (f"kinetic run {st['run_id']}", f"lane: {st['lane']}",
-                                      f"phase: {st['phase']}", f"next: {s['command']}",
-                                      f"why: {s['reason']}")))
+    _emit("\n".join([head, *(_one(x) for x in (f"kinetic run {st['run_id']}", f"lane: {st['lane']}",
+                                               f"phase: {st['phase']}", f"next: {s['command']}",
+                                               f"why: {s['reason']}"))]))
 
 
 if __name__ == "__main__":
