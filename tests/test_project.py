@@ -65,6 +65,38 @@ class ProjectTest(unittest.TestCase):
                 project.create(parent, "inner")
             self.assertFalse((parent / "inner").exists())
 
+    def test_cli_create_without_flags_uses_cwd(self):
+        d = self.tmp / "here"
+        d.mkdir()
+        p = self._cli(d, "create")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(p.stdout), {"project": os.path.realpath(d)})
+        self.assertTrue((d / ".kinetic" / "config.json").is_file())
+
+    def test_cli_create_without_flags_refuses_nonempty_git_or_project_cwd(self):
+        full = self.tmp / "full"
+        full.mkdir()
+        (full / "x").write_text("")
+        g = self.tmp / "g"
+        g.mkdir()
+        subprocess.run(["git", "init", "-q", str(g)], check=True)
+        before = project.load(self.proj)
+        for d in (full, g, self.proj):
+            self.assertEqual(self._cli(d, "create").returncode, 1, d)
+        self.assertEqual([c.name for c in full.iterdir()], ["x"])
+        self.assertFalse((g / ".kinetic").exists())
+        self.assertEqual(project.load(self.proj), before)
+
+    def test_cli_create_refuses_one_flag_alone(self):
+        d = self.tmp / "here"
+        d.mkdir()
+        for args in (("--name", "n"), ("--parent", str(self.tmp))):
+            p = self._cli(d, "create", *args)
+            self.assertEqual(p.returncode, 1, args)
+            self.assertIn("pass both --parent and --name, or neither", p.stderr)
+        self.assertFalse((self.tmp / "n").exists())
+        self.assertFalse((d / ".kinetic").exists())
+
     def test_cli_run_dir_refuses_unsafe_id(self):
         env = {**os.environ, "PYTHONPATH": str(ROOT / "scripts")}
         for bad in ("../x", "a/b", "..", "."):
