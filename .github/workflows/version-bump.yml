@@ -1,0 +1,31 @@
+name: version-bump
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: plugin.json version must be higher than base
+        run: |
+          f=.claude-plugin/plugin.json
+          new=$(jq -r .version "$f")
+          old=$(git show "origin/${{ github.base_ref }}:$f" | jq -r .version)
+          echo "base=$old pr=$new"
+          if [ "$new" = "$old" ] || [ "$(printf '%s\n%s\n' "$old" "$new" | sort -V | tail -1)" != "$new" ]; then
+            echo "::error file=$f::version must be bumped above $old"
+            exit 1
+          fi
+      - name: marketplace.json must list the same version as plugin.json
+        run: |
+          plugin=$(jq -r .version .claude-plugin/plugin.json)
+          listed=$(jq -r '.plugins[0].version' .claude-plugin/marketplace.json)
+          echo "plugin.json=$plugin marketplace.json=$listed"
+          if [ "$plugin" != "$listed" ]; then
+            echo "::error file=.claude-plugin/marketplace.json::version must equal plugin.json ($plugin)"
+            exit 1
+          fi
