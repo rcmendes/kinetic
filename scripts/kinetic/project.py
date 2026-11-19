@@ -202,8 +202,8 @@ def main(argv=None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("find")
     sp = sub.add_parser("create")
-    sp.add_argument("--parent", required=True)
-    sp.add_argument("--name", required=True)
+    sp.add_argument("--parent")  # both omitted: the current folder becomes the project
+    sp.add_argument("--name")
     sp = sub.add_parser("update")
     sp.add_argument("--json", required=True)
     sub.add_parser("runs")
@@ -217,6 +217,11 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
     try:
         if a.cmd == "create":
+            if (a.parent is None) != (a.name is None):
+                raise ValueError("pass both --parent and --name, or neither")
+            if a.parent is None:
+                cwd = Path(os.path.realpath(os.getcwd()))
+                a.parent, a.name = cwd.parent, cwd.name
             out = {"project": str(create(Path(a.parent), a.name))}
         elif a.cmd == "start-session":
             out = {"ok": True}  # a hook reacts to the command; nothing is written here
