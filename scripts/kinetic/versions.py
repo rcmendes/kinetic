@@ -79,13 +79,15 @@ def _gh_latest(repo):
     return done.stdout.strip() if done.returncode == 0 else None
 
 
-def latest_release(repo: str, cache, now: float | None = None, gh=None) -> str | None:
-    """The newest release tag as x.y.z, asked of GitHub at most once a day per repository."""
+def latest_release(repo: str, cache, now: float | None = None, gh=None,
+                   max_age: float = CACHE_TTL) -> str | None:
+    """The newest release tag as x.y.z, asked of GitHub at most once a day per repository
+    (`max_age=0` forces a fresh lookup, for a user who asked to update)."""
     now = time.time() if now is None else now
     cache = Path(cache)
     try:
         saved = json.loads(cache.read_text())
-        if saved.get("repo") == repo and now - float(saved["checked_at"]) < CACHE_TTL:
+        if saved.get("repo") == repo and now - float(saved["checked_at"]) < max_age:
             return _clean(saved.get("latest"))
     except (OSError, ValueError, KeyError, TypeError):
         pass

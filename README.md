@@ -162,6 +162,7 @@ Failing checks print the fix. Then continue with the [quick start](#quick-start)
 
 `kinetic doctor` also compares versions. `version-skew` warns when the plugin a harness loaded and the checkout the `kinetic` command runs from are on different versions (it needs the Claude Code plugin record, so other harnesses show no row). `update-available` warns when a newer release exists on GitHub; it asks `gh` at most once a day, caches the answer in `~/.config/kinetic/update-check.json`, and adds no row when offline or when `gh` fails. Set `"update_check": false` in `~/.config/kinetic/settings.json` to stop the lookup; `version-skew` stays because it reads only local files.
 
+- **Guided:** `/kinetic:update` (or `kinetic update` in a terminal) prints what would change: your version and the latest, the release notes, whether the checkout is clean and on `main`, open runs, and what a ticket store needs from the machine. `kinetic update --apply <pull|install|marketplace>` runs exactly one step: `pull` is a fast-forward and refuses local changes or another branch; `install` re-runs `kinetic install` for every harness that has a manifest; `marketplace` runs the two `claude plugin` commands. The skill asks before each step.
 - **Marketplace install (Claude Code):** `claude plugin marketplace update kinetic`, then `claude plugin update kinetic@kinetic`, then `kinetic install --harness claude` again so the generated files match. Claude Code keeps each installed version in its own folder (`~/.claude/plugins/cache/kinetic/kinetic/<version>`), so every release bumps the version in `.claude-plugin/plugin.json`; a change merged without a bump may not reach marketplace users.
 - **Checkout install:** `git pull`, then re-run `kinetic install --harness <h>` for each harness you use.
 - Check with `kinetic doctor`: it reports a stale install. Releases are described in [docs/RELEASING.md](docs/RELEASING.md).
@@ -490,6 +491,7 @@ Ship fills one template for every PR. The default is `templates/pr-body.md`. To 
 | `/kinetic:doctor` | Read-only health check with a one-line fix per failure |
 | `/kinetic:status [run-dir]` | Phase, tickets, frontier and gates of a run (the active one by default) |
 | `/kinetic:ask` | The lanes and the next step `next_step` computes for the active run |
+| `/kinetic:update` | Shows what is new, then pulls the checkout, reinstalls every installed harness and refreshes the Claude Code plugin, asking before each step |
 | `/kinetic:cleanup [run-dir]` | Removes the run's local worktrees and branches whose work is merged, after one confirmation |
 | `/kinetic:bare-clone <org>/<name> ... \| <url> <name>` | Makes bare clones in that folder |
 | `/kinetic:bare-refresh [repo ...]` | Fetches into the bare clones and reports what advanced |
@@ -518,6 +520,7 @@ A ticket store only offers what its tracker can do. Stores declare optional capa
 | `run` | command | sonnet | The orchestrator: lanes, gates, phases, build loop |
 | `implement` | command | sonnet | `run --from build` |
 | `start`, `doctor`, `status`, `ask` | commands | sonnet, haiku, haiku, haiku | Project creation and read-only views |
+| `update` | command | sonnet | Reads `kinetic update` and runs its steps one by one, each after the user agrees |
 | `cleanup` | command | sonnet | Removes merged worktrees and branches of a run |
 | `bare-clone` | command | sonnet | Bare-clones `<org>/<name>` or a URL into that folder |
 | `bare-refresh` | command | sonnet | Fetches into the bare clones; local branches never move |

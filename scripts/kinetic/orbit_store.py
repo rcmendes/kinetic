@@ -1184,6 +1184,22 @@ def main(argv=None) -> int:
     return 0
 
 
+def tool_requirement(installed=None) -> dict:
+    """The command this store needs and the version it needs (read by `kinetic update`).
+    `installed` returns the installed version; by default it asks `orbit --version`."""
+    def ask():
+        try:
+            done = subprocess.run(["orbit", "--version"], capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        found = re.search(r"(\d+\.\d+\.\d+)", done.stdout) if done.returncode == 0 else None
+        return found.group(1) if found else None
+    from kinetic import versions
+    have = (installed or ask)()
+    return {"name": "orbit", "installed": have, "minimum": MIN_ORBIT,
+            "ok": have is None or not versions.newer(MIN_ORBIT, have)}
+
+
 def make(config: dict) -> OrbitTicketStore:
     return OrbitTicketStore(config)
 
