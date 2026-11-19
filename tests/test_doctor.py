@@ -152,6 +152,50 @@ class DoctorTest(unittest.TestCase):
         c = self._versions(checkout="0.7.0", latest="0.9.0", update_check=False)
         self.assertNotIn("update-available", c)
 
+    def test_all_reports_one_result_per_installed_harness(self):
+        self._write_manifest("claude")
+        self._write_manifest("codex")
+        code, payload = self._main_json("--all")
+        self.assertEqual(set(payload["harnesses"]), {"claude", "codex"})
+        for hid, one in payload["harnesses"].items():
+            self.assertEqual(one["harness"], hid)
+            self.assertTrue(one["checks"])
+        self.assertEqual(payload["ok"], all(h["ok"] for h in payload["harnesses"].values()))
+        self.assertEqual(code, 0 if payload["ok"] else 1)
+
+    def test_all_falls_back_to_the_default_harness_when_nothing_is_installed(self):
+        _, payload = self._main_json("--all")
+        self.assertEqual(set(payload["harnesses"]), {"claude"})
+
+    def test_all_cannot_be_combined_with_a_harness(self):
+        with self.assertRaises(SystemExit) as raised, mock.patch("sys.stderr", io.StringIO()):
+            doctor.main(["--all", "--harness", "codex"])
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_without_all_the_output_is_unchanged(self):
+        self._write_manifest("claude")
+        self._write_manifest("codex")
+        _, payload = self._main_json()
+        self.assertIn("checks", payload)
+        self.assertNotIn("harnesses", payload)
+
+    def test_a_harness_installed_next_to_the_default_is_not_a_warning(self):
+        clone = self.tmp / "clone"
+        clone.mkdir()
+        self.settings.write_text(json.dumps({"harness": "claude", "clone": str(clone)}))
+        self._write_manifest("claude", clone=clone)
+        self._write_manifest("codex", clone=clone)
+        self.assertEqual(self._by_name(harness_id="codex")["harness"]["status"], "pass")
+
+    def test_a_harness_without_a_manifest_still_warns_about_the_recorded_one(self):
+        clone = self.tmp / "clone"
+        clone.mkdir()
+        self.settings.write_text(json.dumps({"harness": "claude", "clone": str(clone)}))
+        self._write_manifest("claude", clone=clone)
+        c = self._by_name(harness_id="codex")["harness"]
+        self.assertEqual(c["status"], "warn")
+        self.assertIn("kinetic install --harness codex", c["fix"])
+
     def test_missing_gh_fails(self):
         (self.bin / "gh").unlink()
         c = self._by_name()

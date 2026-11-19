@@ -154,6 +154,8 @@ Known limitation: the idle re-prompt is best-effort (`experimental.idle` is expe
 kinetic doctor --harness <h>
 ```
 
+With several harnesses installed, `kinetic doctor --all` checks every harness that has an install manifest and prints one result per harness (the default harness alone when nothing is installed). `--all` and `--harness` are mutually exclusive.
+
 Failing checks print the fix. Then continue with the [quick start](#quick-start).
 
 ### 7. Update
