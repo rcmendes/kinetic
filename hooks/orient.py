@@ -17,10 +17,25 @@ def _emit(text: str) -> None:
                                               "additionalContext": text}}))
 
 
+def _update_notice():
+    """The once-a-day line saying a newer release exists, or None. Local files only; the
+    lookup itself runs in a detached process. Never raises."""
+    try:
+        from pathlib import Path
+
+        from kinetic import config, harness, versions
+        return versions.notice(Path.home(), config._load(harness.DEFAULT_SETTINGS), _common._HARNESS)
+    except Exception:
+        return None
+
+
 def main(inp):
     # Always name the harness first: skills pass this id to `kinetic harness`, so a session
     # outside a project, or with no run, still gets its own harness's profile.
     head = f"kinetic harness: {_common._HARNESS}"
+    notice = _update_notice()
+    if notice:
+        head += "\n" + notice
     try:  # marks also expire here, not only when another mark is written
         proj = _common.project.find(inp.get("cwd") or None) if _common.project else None
     except Exception:
