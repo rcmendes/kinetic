@@ -19,12 +19,12 @@ CONCRETE_MODEL = re.compile(r"\b(sonnet|opus|haiku|gpt-[\w.-]+|claude-[\w.-]+)\b
 # The user-only skills carry both invocation keys; no other skill may
 # carry triggers: (doctor keeps only disable-model-invocation, per rulings).
 USER_ONLY_SKILLS = ("ask", "bare-clone", "bare-refresh", "catalog-setup", "cleanup",
-                    "implement", "run", "status")
+                    "implement", "run", "status", "update")
 
 # start replaces init; bare-setup is gone (the project holds bare-repos/).
 SKILLS = {"ask", "bare-clone", "bare-refresh", "catalog-refresh", "catalog-setup", "cleanup",
           "decompose", "discover", "doctor", "grill", "implement", "retro", "run", "ship",
-          "specify", "start", "status", "tdd"}
+          "specify", "start", "status", "tdd", "update"}
 
 # The phase skills that stop and point to kinetic next_step when no Run: is passed.
 PHASE_SKILLS = ("grill", "discover", "specify", "decompose", "ship", "retro")
