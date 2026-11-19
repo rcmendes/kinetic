@@ -73,6 +73,14 @@ class UpdateTest(unittest.TestCase):
         self.assertFalse(p["update_available"])
         self.assertNotIn("notes", p)
 
+    def test_an_older_claude_plugin_is_an_update_even_when_the_checkout_is_current(self):
+        record = self.home / ".claude" / "plugins" / "installed_plugins.json"
+        record.parent.mkdir(parents=True)
+        record.write_text(json.dumps({"plugins": {"kinetic@kinetic": [{"version": "0.6.0"}]}}))
+        p = self.plan(gh=lambda repo: "v0.7.0")
+        self.assertEqual((p["current"], p["plugin"], p["update_available"]), ("0.7.0", "0.6.0", True))
+        self.assertIn("What users must do", p["notes"])
+
     def test_the_plan_lists_each_step_and_whether_it_can_run(self):
         self.publish(self.seed, "0.8.0")
         self.manifest("claude")
