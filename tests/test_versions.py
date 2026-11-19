@@ -122,6 +122,14 @@ class NoticeTest(unittest.TestCase):
         line = self.notice(1000.0)
         self.assertEqual(line, "kinetic 0.8.0 is available (you have 0.7.0): run /kinetic:update")
 
+    def test_an_older_claude_plugin_makes_the_line_when_the_checkout_is_current(self):
+        record = self.home / ".claude" / "plugins" / "installed_plugins.json"
+        record.parent.mkdir(parents=True)
+        record.write_text(json.dumps({"plugins": {"kinetic@kinetic": [{"version": "0.6.0"}]}}))
+        self.cache("0.7.0", 1000.0)
+        self.assertEqual(self.notice(1000.0),
+                         "kinetic 0.7.0 is available (you have 0.6.0): run /kinetic:update")
+
     def test_it_is_shown_at_most_once_a_day(self):
         self.cache("0.8.0", 1000.0)
         self.assertIsNotNone(self.notice(1000.0))

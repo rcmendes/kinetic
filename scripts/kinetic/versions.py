@@ -55,6 +55,13 @@ def plugin_version(harness_id: str, home) -> str | None:
         return None
 
 
+def running_version(clone, harness_id: str, home) -> str | None:
+    """The older of the checkout and the harness's installed plugin: a pulled checkout does
+    not update a Claude Code plugin, so the machine is only as current as the older one."""
+    found = [v for v in (checkout_version(clone), plugin_version(harness_id, home)) if v]
+    return min(found, key=_parse) if found else None
+
+
 def _git(clone):
     def run(args):
         try:
@@ -151,7 +158,8 @@ def notice(home, cfg: dict, harness_id: str, now: float | None = None, spawn=Non
         if cfg.get("update_check", True) is False:
             return None
         clone = cfg.get("clone")
-        here = checkout_version(clone) if isinstance(clone, str) and clone else None
+        has_clone = isinstance(clone, str) and clone and checkout_version(clone)
+        here = running_version(clone, harness_id, home) if has_clone else None
         repo = repository(clone, git) if here else None
         if not repo:
             return None

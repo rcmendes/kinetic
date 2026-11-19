@@ -93,10 +93,11 @@ def plan(clone, home, settings, *, repo=None, gh=None, notes=None, requirements=
     repo = repo or versions.repository(clone)
     latest = versions.latest_release(repo, home / ".config" / "kinetic" / "update-check.json",
                                      gh=gh, max_age=0) if repo else None
-    available = versions.newer(latest, current)
+    available = versions.newer(latest, versions.running_version(clone, "claude", home))
     state = checkout_state(clone, run)
     harnesses = _installed(home, settings)
-    out = {"current": current, "latest": latest, "update_available": available,
+    out = {"current": current, "plugin": versions.plugin_version("claude", home),
+           "latest": latest, "update_available": available,
            "checkout": state, "harnesses": harnesses,
            "open_runs": (open_runs or _open_runs)(),
            "requirements": (requirements or _requirements)()}
