@@ -1,6 +1,6 @@
 # Gates
 
-Three gates: `spec`, `breakdown`, `ship`. Each asks the user — the harness's question tool when the profile names one (`kinetic harness` prints it under `Question tool:`; `none` means chat) — then records the answer:
+Three gates: `spec`, `breakdown`, `ship`. Each asks the user — the harness's question tool when the profile names one (`kinetic harness --harness <id>` prints it under `Question tool:`; `none` means chat; `<id>` is the id on the `kinetic harness:` line of your session context, left out when there is none) — then records the answer:
 
 ```
 kinetic state record-gate --run <run_dir> --gate <spec|breakdown|ship> --approved <true|false> --note "<user's words or empty>"

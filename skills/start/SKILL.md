@@ -7,7 +7,7 @@ argument-hint: "[idea|ticket-ref]"
 
 # Kinetic start
 
-Turn a conversation into a kinetic project, or hand off to the run skill when there is one already. Run scripts as `kinetic <module> ...`; `kinetic root` prints the clone root that skill files are named relative to. Ask the user with the harness's question tool when the profile names one (`kinetic harness` prints it under `Question tool:`; `none` means chat).
+Turn a conversation into a kinetic project, or hand off to the run skill when there is one already. Run scripts as `kinetic <module> ...`; `kinetic root` prints the clone root that skill files are named relative to. Ask the user with the harness's question tool when the profile names one (`kinetic harness --harness <id>` prints it under `Question tool:`; `none` means chat). `<id>` is the id on the `kinetic harness:` line of your session context; leave `--harness <id>` out when there is no such line.
 
 ## 1. Mark this conversation
 

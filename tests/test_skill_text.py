@@ -308,3 +308,25 @@ class OrbitSkillTextTest(unittest.TestCase):
     def test_run_skill_records_the_ticket_store(self):
         text = (ROOT / "skills/run/SKILL.md").read_text()
         self.assertIn('--ticket-store "$(kinetic tracker store-record)"', text)
+
+
+class HarnessIdTest(unittest.TestCase):
+    """A session on any harness asks for its own profile: skills pass the id that the
+    session-start hook puts in the context, instead of relying on the default harness."""
+
+    FILES = sorted(list((ROOT / "skills").rglob("*.md")) + list((ROOT / "agents").glob("*.md")))
+
+    def test_no_skill_asks_for_the_profile_without_an_id(self):
+        offenders = [str(f.relative_to(ROOT)) for f in self.FILES
+                     if "`kinetic harness`" in f.read_text()]
+        self.assertEqual(offenders, [], "pass --harness <id> to kinetic harness")
+
+    def test_a_skill_that_runs_it_says_where_the_id_comes_from(self):
+        for f in self.FILES:
+            text = f.read_text()
+            if "kinetic harness --harness <id>" in text:
+                self.assertIn("`kinetic harness:` line", text, f)
+
+    def test_doctor_checks_the_sessions_own_harness(self):
+        text = (ROOT / "skills" / "doctor" / "SKILL.md").read_text()
+        self.assertIn("kinetic doctor --harness <id>", text)

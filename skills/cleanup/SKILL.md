@@ -28,7 +28,7 @@ For each repo in `state.repos` (its `path` is the integration worktree; its clon
 
 ## 3. Ask once
 
-Show one list, per repo: each worktree path and branch that would be removed, and each one kept with its reason (not merged, PR open, PR closed unmerged, PR state unknown). Ask the user to approve removal of the listed items, with the harness's question tool when the profile names one (`kinetic harness` prints it under `Question tool:`; `none` means chat). On no, stop and say the run can be cleaned up later with `/kinetic:cleanup <run_dir>`.
+Show one list, per repo: each worktree path and branch that would be removed, and each one kept with its reason (not merged, PR open, PR closed unmerged, PR state unknown). Ask the user to approve removal of the listed items, with the harness's question tool when the profile names one (`kinetic harness --harness <id>` prints it under `Question tool:`; `none` means chat). On no, stop and say the run can be cleaned up later with `/kinetic:cleanup <run_dir>`. `<id>` is the id on the `kinetic harness:` line of your session context; leave `--harness <id>` out when there is no such line.
 
 ## 4. Remove
 
