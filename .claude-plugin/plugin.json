@@ -1,5 +1,5 @@
 {
   "name": "kinetic",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "SDLC pipeline: grill, discover, specify, decompose, multi-repo build, review, ship, retro"
 }
