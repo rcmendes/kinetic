@@ -693,7 +693,7 @@ The suite covers every script module and every hook, plus an end-to-end test tha
 
 ## Status and known limitations
 
-kinetic is at 0.8.0 (see `.claude-plugin/plugin.json`). This release uses native Orbit contracts, workflows, links, hierarchy, role identities, review evidence and incremental reads. Existing runs have an explicit migration path; local ticket stores retain their behavior. Scripted temporary-Board integration checks cover publication, migration and reviews. Live harness acceptance remains a separate smoke test. Since 0.8.0 each session names its own harness to the skills, `kinetic doctor --all` checks every installed harness, and kinetic can tell when it is out of date and update itself step by step (`/kinetic:update`). `docs/plan/kinetic-v0-rulings.md` records the original design decisions.
+kinetic is at 0.8.1 (see `.claude-plugin/plugin.json`). This release uses native Orbit contracts, workflows, links, hierarchy, role identities, review evidence and incremental reads. Existing runs have an explicit migration path; local ticket stores retain their behavior. Scripted temporary-Board integration checks cover publication, migration and reviews. Live harness acceptance remains a separate smoke test. Since 0.8.0 each session names its own harness to the skills, `kinetic doctor --all` checks every installed harness, and kinetic can tell when it is out of date and update itself step by step (`/kinetic:update`). `docs/plan/kinetic-v0-rulings.md` records the original design decisions.
 
 Not yet verified in a live session:
 
