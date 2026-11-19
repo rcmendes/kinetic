@@ -876,6 +876,94 @@ class CodexHooks(HookCase):
         self.assertEqual(out["hookSpecificOutput"]["additionalContext"].splitlines()[0],
                          "kinetic harness: codex")
 
+    # -- a run moves between harnesses ------------------------------------------------------
+    # A run belongs to a session id, not to a harness: `kinetic project use-run` in any
+    # harness binds that session and makes it the owner.
+
+    def _claude_claim(self, sid):
+        self.hook("claim_run", {"tool_name": "Bash", "session_id": "%s" % sid, "cwd": str(self.proj),
+                                "tool_input": {"command": f"kinetic project use-run --run {self.run_dir}"}})
+
+    def _binding(self, sid):
+        f = self.proj / ".kinetic" / "sessions" / sid
+        return f.read_text() if f.exists() else None
+
+    def _codex_claim(self, sid):
+        self.codex("claim_run", {"hook_event_name": "PostToolUse", "session_id": sid,
+                                 "cwd": str(self.proj), "model": "gpt-6.1-sol", "tool_name": "Bash",
+                                 "tool_input": {"command": f"kinetic project use-run --run {self.run_dir}"},
+                                 "tool_response": "", "tool_use_id": "tu1"})
+
+    def test_a_run_started_in_claude_can_be_taken_over_from_codex(self):
+        self.activate()
+        self._claude_claim("claude-1")
+        self.assertEqual(state.load(self.run_dir).get("owner_session"), "claude-1")
+        self._codex_claim("codex-1")
+        self.assertEqual(state.load(self.run_dir).get("owner_session"), "codex-1")
+        self.assertEqual(self._binding("codex-1"), os.path.realpath(self.run_dir))
+
+    def test_the_resume_command_is_spelled_for_the_harness(self):
+        self.activate()
+        self._claude_claim("claude-1")
+        self._codex_claim("codex-1")
+        text = self.codex("orient", {"hook_event_name": "SessionStart", "session_id": "codex-1",
+                                     "cwd": str(self.proj), "source": "startup"})[
+            "hookSpecificOutput"]["additionalContext"]
+        self.assertIn("next: $kntc-run", text)
+        self.assertNotIn("/kinetic:", text)
+
+    def test_the_no_project_offer_is_spelled_for_the_harness(self):
+        text = self.codex("orient", {"hook_event_name": "SessionStart", "session_id": "codex-1",
+                                     "cwd": str(self.home), "source": "startup"})[
+            "hookSpecificOutput"]["additionalContext"]
+        self.assertIn("offer $kntc-start", text)
+
+    def test_the_new_harness_is_told_about_the_run_at_session_start(self):
+        self.activate()
+        self._claude_claim("claude-1")
+        self._codex_claim("codex-1")
+        out = self.codex("orient", {"hook_event_name": "SessionStart", "session_id": "codex-1",
+                                    "cwd": str(self.proj), "source": "startup"})
+        text = out["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(text.splitlines()[0], "kinetic harness: codex")
+        self.assertIn("kinetic run", text)
+        self.assertIn("feature", text)
+
+    def test_after_a_takeover_the_new_owner_is_enforced_and_the_old_one_is_not(self):
+        self.activate()
+        self._claude_claim("claude-1")
+        self._codex_claim("codex-1")
+        denied = self.codex("isolation", self.pre(
+            "apply_patch", {"command": self.patch(self.update("/etc/passwd"))}, sid="codex-1"))
+        self.assertEqual(self.decision(denied), "deny")
+        # the previous owner, outside the run directory, is no longer governed by this run
+        self.assertIsNone(self.hook("isolation", {
+            "tool_name": "Write", "tool_input": {"file_path": "/etc/passwd"},
+            "session_id": "claude-1", "cwd": str(self.proj)}))
+
+    def test_both_harnesses_inside_the_run_directory_are_governed(self):
+        self.activate()
+        self._claude_claim("claude-1")
+        self._codex_claim("codex-1")
+        claude = self.hook("isolation", {"tool_name": "Write", "tool_input": {"file_path": "/etc/passwd"},
+                                         "session_id": "claude-1", "cwd": str(self.run_dir)})
+        self.assertEqual(self.decision(claude), "deny")
+        codex = self.codex("isolation", self.pre(
+            "apply_patch", {"command": self.patch(self.update("/etc/passwd"))}, sid="codex-1",
+            cwd=str(self.run_dir)))
+        self.assertEqual(self.decision(codex), "deny")
+
+    def test_edits_from_two_harnesses_are_both_recorded_without_clobbering(self):
+        self.activate()
+        self._claude_claim("claude-1")
+        self._codex_claim("codex-1")
+        self.hook("record_edit", {"tool_input": {"file_path": str(self.repo / "a.py")},
+                                  "session_id": "claude-1", "cwd": str(self.repo)})
+        self.codex("record_edit", self.pre("apply_patch", {"command": self.patch(self.update(str(self.repo / "b.py")))},
+                                           sid="codex-1"))
+        self.assertTrue(state.load(self.run_dir)["repos"]["api"].get("last_edit_at"))
+        self.assertEqual(state.load(self.run_dir).get("owner_session"), "codex-1")
+
     def test_isolation_fail_closed_asks_on_apply_patch_garbage(self):
         self.activate()
         (self.run_dir / ".kinetic" / "state.json").write_text("{not json")

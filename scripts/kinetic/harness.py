@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -206,6 +207,27 @@ def active_harness(harness: str | None = None, settings: Path | None = None) -> 
     if not isinstance(hid, str):
         raise HarnessError(f"harness in {path} must be a string")
     return profile(hid)["id"]
+
+
+# How each harness names a kinetic skill: Claude Code and Devin namespace skills under the
+# plugin (/kinetic:<name>); Codex and OpenCode get flat kntc-<name> stubs, invoked as
+# $kntc-<name> on Codex.
+_SKILL_FORMS = {"claude": "/kinetic:{}", "devin": "/kinetic:{}",
+                "codex": "$kntc-{}", "opencode": "kntc-{}"}
+_SKILL_REF = re.compile(r"/kinetic:([a-z][a-z-]*)")
+
+
+def skill_command(harness_id: str, name: str) -> str:
+    """The text that invokes the kinetic skill `name` on that harness."""
+    return _SKILL_FORMS.get(harness_id, _SKILL_FORMS["claude"]).format(name)
+
+
+def localize(text: str, harness_id: str) -> str:
+    """`text` with every /kinetic:<name> written the way `harness_id` invokes skills. Text
+    for an unknown harness is returned unchanged."""
+    if harness_id not in _SKILL_FORMS:
+        return text
+    return _SKILL_REF.sub(lambda m: skill_command(harness_id, m.group(1)), text)
 
 
 def instructed(p: dict) -> list[str]:

@@ -111,8 +111,6 @@ def latest_release(repo: str, cache, now: float | None = None, gh=None,
 
 NOTICE_EVERY = 24 * 3600
 REFRESH_EVERY = 6 * 3600
-UPDATE_COMMAND = {"claude": "/kinetic:update", "devin": "/kinetic:update",
-                  "codex": "$kntc-update", "opencode": "kntc-update"}
 
 
 def _read(path) -> dict:
@@ -175,7 +173,8 @@ def notice(home, cfg: dict, harness_id: str, now: float | None = None, spawn=Non
             return None
         state["shown_at"] = now
         _write(state_path, state)
-        command = UPDATE_COMMAND.get(harness_id, UPDATE_COMMAND["claude"])
+        from kinetic import harness
+        command = harness.skill_command(harness_id, "update")
         return f"kinetic {latest} is available (you have {here}): run {command}"
     except Exception:  # noqa: BLE001 - a notice must never break a session
         return None
