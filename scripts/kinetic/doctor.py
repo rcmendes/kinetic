@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from kinetic import config, harness, install, project, ticket_store, tracker
+from kinetic import config, harness, install, project, ticket_store, tracker, versions
 
 SKILLS = ["resolving-merge-conflicts"]
 PLUGINS = ["superpowers", "dev-fleet"]
@@ -631,6 +631,7 @@ def checks(repos: list[tuple[str, str]], home: Path | None = None,
             cfg = {}
         out.append(_harness_check(cfg, hid, settings, _manifest_path(home, hid).is_file()))
         out.extend(_install_checks(home, hid, settings, cfg))
+        out.extend(_version_checks(home, hid, cfg))
 
     for name, path in repos if project_config else []:
         if project_res["status"] == "fail":
@@ -647,6 +648,41 @@ def checks(repos: list[tuple[str, str]], home: Path | None = None,
     out.extend(_skill_checks(home, prof))
     if project_config:
         out.extend(_tracker_checks(Path(project_config), gh_auth))
+    return out
+
+
+def _version_checks(home: Path, hid: str, cfg: dict) -> list[dict]:
+    """version-skew: the plugin a harness loaded against the checkout the launcher runs from.
+    update-available: the latest GitHub release against the checkout (looked up at most once
+    a day; `update_check: false` in settings.json turns the lookup off). A version that cannot
+    be read adds no row, so these checks stay quiet offline and without `gh`."""
+    clone = cfg.get("clone")
+    if not (isinstance(clone, str) and clone):
+        return []
+    here = versions.checkout_version(clone)
+    out = []
+    plugin = versions.plugin_version(hid, home)
+    if here and plugin:
+        if plugin == here:
+            out.append(_r("version-skew", "pass"))
+        elif versions.newer(plugin, here):
+            out.append(_r("version-skew", "warn",
+                          f"the plugin is {plugin} but the kinetic command runs from a checkout at {here}; "
+                          f"run: git -C {clone} pull --ff-only && kinetic install --harness {hid}"))
+        else:
+            out.append(_r("version-skew", "warn",
+                          f"the checkout is {here} but the plugin is {plugin}; "
+                          "run: claude plugin marketplace update kinetic && claude plugin update kinetic@kinetic"))
+    if here and cfg.get("update_check", True) is not False:
+        repo = versions.repository(clone)
+        latest = versions.latest_release(repo, home / ".config" / "kinetic" / "update-check.json") if repo else None
+        if latest:
+            if versions.newer(latest, here):
+                out.append(_r("update-available", "warn",
+                              f"kinetic {latest} is available (the checkout is {here}); see docs/RELEASING.md "
+                              f"for how to update, or: git -C {clone} pull --ff-only && kinetic install --harness {hid}"))
+            else:
+                out.append(_r("update-available", "pass"))
     return out
 
 

@@ -105,6 +105,53 @@ class DoctorTest(unittest.TestCase):
             code = doctor.main(list(argv))
         return code, json.loads(out.getvalue())
 
+    # -- versions: plugin, checkout, latest release ---------------------------------
+
+    def _versions(self, checkout="0.7.0", plugin=None, latest=None, remote="git@github.com:acme/kinetic.git",
+                  **cfg):
+        clone = self.tmp / "clone"
+        (clone / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+        (clone / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": checkout}))
+        self.settings.write_text(json.dumps({"harness": "claude", "clone": str(clone), **cfg}))
+        if plugin:
+            rec = self.home / ".claude" / "plugins" / "installed_plugins.json"
+            rec.parent.mkdir(parents=True, exist_ok=True)
+            rec.write_text(json.dumps({"plugins": {"kinetic@kinetic": [{"version": plugin}]}}))
+        self._stub("git", 0, f"echo {remote}")
+        if latest:
+            self._stub("gh", 0, f'case "$1" in api) echo v{latest};; esac')
+        else:
+            self._stub("gh", 0, 'case "$1" in api) exit 1;; esac')
+        return self._by_name()
+
+    def test_a_plugin_and_checkout_on_different_versions_are_flagged(self):
+        c = self._versions(checkout="0.6.0", plugin="0.7.0")["version-skew"]
+        self.assertEqual(c["status"], "warn")
+        self.assertIn("0.7.0", c["fix"])
+        self.assertIn("0.6.0", c["fix"])
+
+    def test_matching_versions_pass(self):
+        self.assertEqual(self._versions(checkout="0.7.0", plugin="0.7.0")["version-skew"]["status"], "pass")
+
+    def test_no_plugin_record_means_no_skew_row(self):
+        self.assertNotIn("version-skew", self._versions(checkout="0.7.0"))
+
+    def test_a_newer_release_is_reported(self):
+        c = self._versions(checkout="0.7.0", plugin="0.7.0", latest="0.8.0")["update-available"]
+        self.assertEqual(c["status"], "warn")
+        self.assertIn("0.8.0", c["fix"])
+        self.assertIn("0.7.0", c["fix"])
+
+    def test_being_on_the_latest_release_passes(self):
+        self.assertEqual(self._versions(latest="0.7.0")["update-available"]["status"], "pass")
+
+    def test_a_failed_release_lookup_adds_no_row(self):
+        self.assertNotIn("update-available", self._versions(latest=None))
+
+    def test_the_setting_turns_the_release_lookup_off(self):
+        c = self._versions(checkout="0.7.0", latest="0.9.0", update_check=False)
+        self.assertNotIn("update-available", c)
+
     def test_all_reports_one_result_per_installed_harness(self):
         self._write_manifest("claude")
         self._write_manifest("codex")
