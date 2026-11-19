@@ -47,7 +47,7 @@ All work goes through two stages. The implementation agent has the most **contex
 
 ### Files
 
-- Instruction file (the steering file retro's proposals target): the first file in the harness profile's instruction list that exists in the repo. `kinetic harness` prints the list under `Instruction files:` in the order the harness reads them — Claude Code: `CLAUDE.md` then `AGENTS.md`; Codex, OpenCode and Devin: `AGENTS.md` first (`CLAUDE.md` second where listed). Check per repo; propose edits to that file only. It is pushed to the context window of any agent in the repo: use incredibly sparingly, usually only for **navigation pointers** to other files.
+- Instruction file (the steering file retro's proposals target): the first file in the harness profile's instruction list that exists in the repo. `kinetic harness --harness <id>` prints the list under `Instruction files:` in the order the harness reads them — Claude Code: `CLAUDE.md` then `AGENTS.md`; Codex, OpenCode and Devin: `AGENTS.md` first (`CLAUDE.md` second where listed). Check per repo; propose edits to that file only. It is pushed to the context window of any agent in the repo: use incredibly sparingly, usually only for **navigation pointers** to other files. `<id>` is the id on the `kinetic harness:` line of your session context; leave `--harness <id>` out when there is no such line.
 - `CODING_STANDARDS.md`: read during review, not implementation. Add **navigation pointers** to docs folders if it grows past about 1,000 lines.
 - Docs: reference files pointed to by other files. Look for existing docs before writing new ones.
 - Skills: for docs (their description enters the agent's context window) or user-invoked commands.

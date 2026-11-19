@@ -48,7 +48,7 @@ Grant: <the Grant line from gates.md>
 
 Keep the implementer `Identity` unchanged when resuming or dispatching a replacement for the same ticket; the two implementer tiers share it.
 
-`kinetic harness` (run preflight) reports `Resume sub-agent: yes|no` for the active harness. Whenever a running implementer needs more input — a `Fix:` file, an answer to its `Questions:`, a ruling — pick the path from that line:
+`kinetic harness --harness <id>` (run preflight) reports `Resume sub-agent: yes|no` for the active harness. `<id>` is the id on the `kinetic harness:` line of your session context; leave `--harness <id>` out when there is no such line. Whenever a running implementer needs more input — a `Fix:` file, an answer to its `Questions:`, a ruling — pick the path from the `Resume sub-agent` result:
 
 - **yes**: resume the same implementer with the input; it keeps its context.
 - **no, or the resume fails**: start a fresh `implementer` on the same worktree (same branch, same `Repo:`) with the normal brief plus a `Checkpoint:` line when `kinetic state last-checkpoint --run <run_dir> --id <id>` returns one (its `progress`, `next` and `blocker` joined on one line), plus `Previous report: <run_dir>/.kinetic/reports/<id>.md` and the input on its own line — `Fix: <findings file>`, `Answer: <the supplied context>`, or `Ruling: <n>` where `<n>` is the ruling's 1-based position in the run's `rulings` list in state.json (`add-ruling` prints the whole list; the new entry is last). On fix round 3 the fresh dispatch is `implementer-strong` instead.

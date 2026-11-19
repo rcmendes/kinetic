@@ -21,7 +21,7 @@ If `existing_config` is set, say which folder it is and ask whether to keep it o
 
 If the arguments name a folder, use it and skip the question.
 
-Otherwise ask once, with the harness's question tool when the profile names one (`kinetic harness` prints it under `Question tool:`; `none` means chat). Options, in this order:
+Otherwise ask once, with the harness's question tool when the profile names one (`kinetic harness --harness <id>` prints it under `Question tool:`; `none` means chat). `<id>` is the id on the `kinetic harness:` line of your session context; leave `--harness <id>` out when there is no such line. Options, in this order:
 
 1. The recommended path, with its reason. Leave it out when `recommendation` is null.
 2. "Current folder": the current working directory.

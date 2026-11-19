@@ -17,7 +17,7 @@ The orchestrator passes:
 - `Spec:` the spec location, if there is one;
 - `Mode: full` or `Mode: confirm-only` (tickets already in hand, or a repo added later by the decompose phase).
 
-Run scripts as `kinetic <module> ...`. Ask the user with the harness's question tool when the profile names one (`kinetic harness` prints it under `Question tool:`; `none` means chat).
+Run scripts as `kinetic <module> ...`. Ask the user with the harness's question tool when the profile names one (`kinetic harness --harness <id>` prints it under `Question tool:`; `none` means chat). `<id>` is the id on the `kinetic harness:` line of your session context; leave `--harness <id>` out when there is no such line.
 
 Each step below is either **agent** (you work alone and ask nothing) or **you** (the user answers). On a **you** step, never answer for the user, never guess their answer, and ask every question of that step in one message.
 

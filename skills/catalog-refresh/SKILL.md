@@ -17,7 +17,7 @@ Input, one of:
 - `Query: <tracker query>` (the tracker's own search: JQL for Jira, a search string for GitHub or Linear)
 - `Run: <run_dir>` (passed by `cleanup`)
 
-Ask the user with the harness's question tool when the profile names one (`kinetic harness` prints it under `Question tool:`; `none` means chat).
+Ask the user with the harness's question tool when the profile names one (`kinetic harness --harness <id>` prints it under `Question tool:`; `none` means chat). `<id>` is the id on the `kinetic harness:` line of your session context; leave `--harness <id>` out when there is no such line.
 
 ## 1. Is a catalog set?
 
