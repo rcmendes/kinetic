@@ -617,7 +617,7 @@ The 0.2.0 top-level `jira_project`, `slice_issue_type` and `child_issue_type` ke
 | `confirm_deploy` | PreToolUse on deploy and Tekton-trigger MCP calls | Asks first |
 | `record_edit` | PostToolUse on file writes | Records edits so the Stop gate can compare them with verifies |
 | `claim_run` | PostToolUse on Bash | Binds the session to the run selected with `kinetic project use-run` and records its owner |
-| `orient` | SessionStart | Tells a new session about the active run and the next step |
+| `orient` | SessionStart | Names the session's harness (`kinetic harness: <id>`, always, even outside a project), then tells it about the active run and the next step |
 
 The run-scoped hooks (isolation, record_edit, completion_gate) act in the session bound to a run and on calls inside that run's directory, including subagent work there. Other sessions stay independent. The push and deploy hooks always apply.
 

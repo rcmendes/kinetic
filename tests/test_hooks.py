@@ -732,6 +732,13 @@ class DevinHooks(HookCase):
         out = out["hookSpecificOutput"]
         self.assertEqual(out["hookEventName"], "SessionStart")
         self.assertIn("feature", out["additionalContext"])
+        self.assertEqual(out["additionalContext"].splitlines()[0], "kinetic harness: devin")
+
+    def test_orient_names_the_harness_outside_a_project(self):
+        out = self.devin("orient", {"hook_event_name": "SessionStart", "source": "startup",
+                                    "session_id": "s1", "cwd": str(self.home)}, cwd=self.home)
+        self.assertEqual(out["hookSpecificOutput"]["additionalContext"].splitlines()[0],
+                         "kinetic harness: devin")
 
     def test_unknown_harness_falls_back_to_claude(self):
         self.activate()
@@ -861,6 +868,13 @@ class CodexHooks(HookCase):
         hso = out["hookSpecificOutput"]
         self.assertEqual(hso["hookEventName"], "SessionStart")
         self.assertIn("feature", hso["additionalContext"])
+        self.assertEqual(hso["additionalContext"].splitlines()[0], "kinetic harness: codex")
+
+    def test_orient_names_the_harness_outside_a_project(self):
+        out = self.codex("orient", {"hook_event_name": "SessionStart", "session_id": "s1",
+                                    "cwd": str(self.home), "source": "startup"})
+        self.assertEqual(out["hookSpecificOutput"]["additionalContext"].splitlines()[0],
+                         "kinetic harness: codex")
 
     def test_isolation_fail_closed_asks_on_apply_patch_garbage(self):
         self.activate()
@@ -1043,6 +1057,13 @@ class OpenCodeHooks(HookCase):
                                  "sessionID": "s1"})
         hso = out["hookSpecificOutput"]
         self.assertIn("feature", hso["additionalContext"])
+        self.assertEqual(hso["additionalContext"].splitlines()[0], "kinetic harness: opencode")
+
+    def test_orient_names_the_harness_outside_a_project(self):
+        out = self.oc("orient", {"kinetic_event": "SessionStart", "sessionID": "s1",
+                                 "cwd": str(self.home)})
+        self.assertEqual(out["hookSpecificOutput"]["additionalContext"].splitlines()[0],
+                         "kinetic harness: opencode")
 
     def test_fail_closed_asks_in_opencode_shape(self):
         self.activate()
@@ -1078,27 +1099,30 @@ class RecordEditAndOrient(HookCase):
         self.activate()
         state.set_ticket(self.run_dir, "T\n1", repo="api", status="needs_decision")
         text = self.hook("orient", {})["hookSpecificOutput"]["additionalContext"]
-        self.assertEqual(len(text.splitlines()), 5)
+        self.assertEqual(len(text.splitlines()), 6)
+        self.assertEqual(text.splitlines()[0], "kinetic harness: claude")
         self.assertIn("ticket T 1 needs", text)
 
     def test_record_edit_noop_without_run(self):
         self.assertIsNone(self.hook("record_edit", {"tool_input": {"file_path": "/x"}}))
 
-    def test_orient_silent_without_run(self):
-        self.assertIsNone(self.hook("orient", {}))
-        self.assertIsNone(self.hook("orient", {"cwd": str(self.proj), "session_id": "s1"}))
+    def test_orient_names_only_the_harness_without_a_run(self):
+        for payload in ({}, {"cwd": str(self.proj), "session_id": "s1"}):
+            out = self.hook("orient", payload)
+            self.assertEqual(out["hookSpecificOutput"]["additionalContext"], "kinetic harness: claude")
 
     def test_orient_names_open_runs_at_root_without_binding(self):
         self.activate()
         text = self.hook("orient", {"cwd": str(self.proj), "session_id": "s1"})[
             "hookSpecificOutput"]["additionalContext"]
-        self.assertEqual(len(text.splitlines()), 1)
-        self.assertIn("run", text)
+        self.assertEqual(len(text.splitlines()), 2)
+        self.assertEqual(text.splitlines()[0], "kinetic harness: claude")
         self.assertIn("/kinetic:run", text)
 
     def test_orient_outside_project_offers_start(self):
         out = self.hook("orient", {"cwd": str(self.home), "session_id": "s1"})
         self.assertEqual(out["hookSpecificOutput"]["additionalContext"],
+                         "kinetic harness: claude\n"
                          "kinetic: no project here. If this conversation becomes a project "
                          "(a goal, the systems involved, references), offer /kinetic:start.")
 
@@ -1127,12 +1151,12 @@ class RecordEditAndOrient(HookCase):
         self.assertIn("next: /kinetic:run", text)
         self.assertIn("why: resume at intake", text)
 
-    def test_orient_prints_at_most_five_lines(self):
+    def test_orient_prints_the_harness_line_and_at_most_five_more(self):
         self.activate()
         out = self.hook("orient", {})["hookSpecificOutput"]
         self.assertEqual(out["hookEventName"], "SessionStart")
         text = out["additionalContext"]
-        self.assertLessEqual(len(text.splitlines()), 5)
+        self.assertLessEqual(len(text.splitlines()), 6)  # the harness line, then at most five
         self.assertIn("feature", text)
         self.assertIn("intake", text)
         self.assertIn("/kinetic:", text)
